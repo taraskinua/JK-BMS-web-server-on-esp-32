@@ -15,9 +15,9 @@
 #include <string>
 
 // --- Настройки WiFi ---
-const char* ssid = "";
+const char* ssid = "homewifi";
 // <-- ЗАМЕНИТЕ на ваш SSID
-const char* password = "";
+const char* password = "homewifi1234567890";
 // <-- ЗАМЕНИТЕ на ваш пароль
 
 // --- Глобальные объекты веб-сервера ---
@@ -1000,13 +1000,48 @@ void init_wifi() {
   }
 };
 
+
+void blutooth() {
+    
+  if (deviceFound && !isConnected) {
+    connectToBMS();
+  }  
+  // Если не найдено (или соединение потеряно) и нет выбранного устройства
+  else if (!deviceFound && !isConnected) {
+    
+    // Очищаем предыдущие результаты сканирования перед новым стартом
+    for (auto& pair : foundDevices) {
+        delete pair.second.pAdvertisedDevice;
+    }
+    foundDevices.clear();
+    
+    Serial.println("Починаємо сканування...");
+    // Сканируем 5 секунд (или пока не найдем)
+    pBLEScan->start(5, false); 
+    Serial.printf("Сканування завершено. Знайдено пристроїв: %d\n", foundDevices.size());
+
+    // Если найдено только ОДНО устройство, сразу устанавливаем его для подключения
+    if (foundDevices.size() == 1) {
+      // Так как map содержит только 1 элемент, берем его
+      pBmsDevice = foundDevices.begin()->second.pAdvertisedDevice;
+      deviceFound = true; 
+      Serial.println("Знайдено 1 пристрій, спроба автоматичного підключення.");
+    } 
+    // Если 0 или >1, то deviceFound остается false. Пользователь должен перейти на /scan
+    // для повторного сканирования или выбора.
+  }
+
+  delay(1000);
+};
+
 void setup() {
   Serial.begin(115200);
 
   init_wifi();
+
   // run blutooth on core 0
-  xTaskCreatePinnedToCore(
-    blutooth(),  // Название функции
+  xTaskCreatePinnedToCore (
+    blutooth,  // Название функции
     "Проверка и подключение блутуза",  // Имя задачи (для отладки)
     10000,        // Размер стека задачи (в байтах)
     NULL,         // Параметр для функции (NULL, если не нужен)
@@ -1057,35 +1092,3 @@ void loop() {
   delay(100);
 };
 
-void blutooth() {
-    
-  if (deviceFound && !isConnected) {
-    connectToBMS();
-  }  
-  // Если не найдено (или соединение потеряно) и нет выбранного устройства
-  else if (!deviceFound && !isConnected) {
-    
-    // Очищаем предыдущие результаты сканирования перед новым стартом
-    for (auto& pair : foundDevices) {
-        delete pair.second.pAdvertisedDevice;
-    }
-    foundDevices.clear();
-    
-    Serial.println("Починаємо сканування...");
-    // Сканируем 5 секунд (или пока не найдем)
-    pBLEScan->start(5, false); 
-    Serial.printf("Сканування завершено. Знайдено пристроїв: %d\n", foundDevices.size());
-
-    // Если найдено только ОДНО устройство, сразу устанавливаем его для подключения
-    if (foundDevices.size() == 1) {
-      // Так как map содержит только 1 элемент, берем его
-      pBmsDevice = foundDevices.begin()->second.pAdvertisedDevice;
-      deviceFound = true; 
-      Serial.println("Знайдено 1 пристрій, спроба автоматичного підключення.");
-    } 
-    // Если 0 или >1, то deviceFound остается false. Пользователь должен перейти на /scan
-    // для повторного сканирования или выбора.
-  }
-
-  delay(1000);
-};
