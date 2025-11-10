@@ -14,9 +14,9 @@
 #include <string>
 
 // --- Настройки WiFi ---
-const char* ssid = "homewifi";
+const char* ssid = "";
 // <-- ЗАМЕНИТЕ на ваш SSID
-const char* password = "homewifi1234567890";
+const char* password = "";
 // <-- ЗАМЕНИТЕ на ваш пароль
 
 // --- Глобальные объекты веб-сервера ---
