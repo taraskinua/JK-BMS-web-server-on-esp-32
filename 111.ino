@@ -1028,23 +1028,16 @@ void setup() {
   pBLEScan->setActiveScan(true);
   pBLEScan->setInterval(100);
   pBLEScan->setWindow(99);
-
-  // run web server on core 0
-  xTaskCreatePinnedToCore(
-    server,          // Название функции (ИСПРАВЛЕНО: без круглых скобок)
-    "WEB server",    // Имя задачи (для отладки)
-    10000,           // Размер стека задачи (в байтах)
-    NULL,            // Параметр для функции (NULL, если не нужен)
-    3,               // Приоритет задачи (1 - обычный)
-    NULL,            // Указатель на созданную задачу (NULL, если не нужен)
-    0                // НОМЕР ЯДРА: 0 (Core 0)
-  );
 };
 
 
 
 void loop() {
-  delay(5000);
+  server.handleClient();
+  if (WiFi.status() != WL_CONNECTED) {
+    init_wifi()
+  }
+  delay(500);
   if (deviceFound && !isConnected) {
     connectToBMS();
   }
@@ -1073,16 +1066,3 @@ void loop() {
     // для повторного сканирования или выбора.
   }
 };
-
-void server(void* parameter) {
-  // Внутри этой функции должен быть бесконечный цикл,
-  // чтобы задача не завершилась и не вызвала сбой системы.
-  for (;;) {
-    // Код выполнения
-    vTaskDelay(100 / portTICK_PERIOD_MS);  // Обязательная задержка!
-    server.handleClient();
-    if (WiFi.status() != WL_CONNECTED) {
-      init_wifi()
-    }
-  }
-}
