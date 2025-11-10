@@ -14,9 +14,9 @@
 #include <string>
 
 // --- Настройки WiFi ---
-const char* ssid = "";
+const char* ssid = "homewifi";
 // <-- ЗАМЕНИТЕ на ваш SSID
-const char* password = "";
+const char* password = "homewifi1234567890";
 // <-- ЗАМЕНИТЕ на ваш пароль
 
 // --- Глобальные объекты веб-сервера ---
@@ -1022,7 +1022,7 @@ void webServerTask(void* parameter) {
 
     // Обязательная небольшая задержка, чтобы дать время другим задачам
     // и менеджеру Wi-Fi (должен быть небольшим для быстрой реакции)
-    vTaskDelay(5 / portTICK_PERIOD_MS);
+    vTaskDelay(300 / portTICK_PERIOD_MS);
   };
 };
 
@@ -1037,10 +1037,13 @@ void webServerTask(void* parameter) {
       "WebServer",    // Имя задачи
       10000,          // Размер стека (10K - достаточно для WebServer)
       NULL,           // Параметр (не используем)
-      1,              // Приоритет (можно поднять до 5-10 для лучшей отзывчивости)
+      5,              // Приоритет (можно поднять до 5-10 для лучшей отзывчивости)
       NULL,           // Указатель на задачу
       1               // ЯДРО: Core 1 (Core 0 часто используется для задач ядра FreeRTOS)
     );
+
+
+
 
     BLEDevice::init("ESP32_JK_Client");
 
@@ -1052,11 +1055,12 @@ void webServerTask(void* parameter) {
   };
 
 
+
   void loop() {
     if (WiFi.status() != WL_CONNECTED) {
       init_wifi();
     };
-    delay(500);
+    delay(1000);
     if (deviceFound && !isConnected) {
       connectToBMS();
     }
@@ -1083,5 +1087,7 @@ void webServerTask(void* parameter) {
       }
       // Если 0 или >1, то deviceFound остается false. Пользователь должен перейти на /scan
       // для повторного сканирования или выбора.
-    }
+    } else if (deviceFound && isConnected) {
+      delay(5000);
+    };
   };
