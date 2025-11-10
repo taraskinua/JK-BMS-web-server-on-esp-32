@@ -8,8 +8,7 @@
 #include "BLEDevice.h"
 #include <WiFi.h>
 #include <WebServer.h>
-#include <Update.h>   // Для OTA обновления
-#include <ESPmDNS.h>  // Для доступа по имени хоста (опционально, но полезно)
+#include <Update.h>  // Для OTA обновления
 #include <vector>
 #include <map>
 #include <string>
@@ -985,19 +984,14 @@ void init_wifi() {
   }
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println(WiFi.localIP());
-    if (MDNS.begin(host)) {
-      Serial.printf("mDNS запущен, доступно по http://%s.local\n", host);
-    }
   } else {
     Serial.println("\n Не удалось подключиться к WiFi.");
   }
 };
 
-void setup() {
-  Serial.begin(115200);
 
-  init_wifi();
-
+void webServerTask(void* parameter) {
+  // Инициализация WebServer (должна быть внутри задачи)
   // --- ОБНОВЛЕННЫЕ ОБРАБОТЧИКИ ---
   server.on("/", handleRoot);
   // Обновление настроек BMS (НОВЫЙ ОБРАБОТЧИК)
@@ -1021,48 +1015,73 @@ void setup() {
   server.begin();
   Serial.println("Веб-сервер запущен.");
 
-  BLEDevice::init("ESP32_JK_Client");
+  // БЕСКОНЕЧНЫЙ ЦИКЛ ЗАДАЧИ
+  for (;;) {
+    // Вся работа сервера — это обработка клиентских запросов
+    server.handleClient();
 
-  pBLEScan = BLEDevice::getScan();
-  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-  pBLEScan->setActiveScan(true);
-  pBLEScan->setInterval(100);
-  pBLEScan->setWindow(99);
+    // Обязательная небольшая задержка, чтобы дать время другим задачам
+    // и менеджеру Wi-Fi (должен быть небольшим для быстрой реакции)
+    vTaskDelay(5 / portTICK_PERIOD_MS);
+  };
 };
 
+  void setup() {
+    Serial.begin(115200);
+
+    init_wifi();
+
+    // 2. Создание и привязка задачи для Веб-сервера
+    xTaskCreatePinnedToCore(
+      webServerTask,  // Функция, которую нужно запустить
+      "WebServer",    // Имя задачи
+      10000,          // Размер стека (10K - достаточно для WebServer)
+      NULL,           // Параметр (не используем)
+      1,              // Приоритет (можно поднять до 5-10 для лучшей отзывчивости)
+      NULL,           // Указатель на задачу
+      1               // ЯДРО: Core 1 (Core 0 часто используется для задач ядра FreeRTOS)
+    );
+
+    BLEDevice::init("ESP32_JK_Client");
+
+    pBLEScan = BLEDevice::getScan();
+    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+    pBLEScan->setActiveScan(true);
+    pBLEScan->setInterval(100);
+    pBLEScan->setWindow(99);
+  };
 
 
-void loop() {
-  server.handleClient();
-  if (WiFi.status() != WL_CONNECTED) {
-    init_wifi()
-  }
-  delay(500);
-  if (deviceFound && !isConnected) {
-    connectToBMS();
-  }
-  // Если не найдено (или соединение потеряно) и нет выбранного устройства
-  else if (!deviceFound && !isConnected) {
-
-    // Очищаем предыдущие результаты сканирования перед новым стартом
-    for (auto& pair : foundDevices) {
-      delete pair.second.pAdvertisedDevice;
+  void loop() {
+    if (WiFi.status() != WL_CONNECTED) {
+      init_wifi();
+    };
+    delay(500);
+    if (deviceFound && !isConnected) {
+      connectToBMS();
     }
-    foundDevices.clear();
+    // Если не найдено (или соединение потеряно) и нет выбранного устройства
+    else if (!deviceFound && !isConnected) {
 
-    Serial.println("Починаємо сканування...");
-    // Сканируем 5 секунд (или пока не найдем)
-    pBLEScan->start(5, false);
-    Serial.printf("Сканування завершено. Знайдено пристроїв: %d\n", foundDevices.size());
+      // Очищаем предыдущие результаты сканирования перед новым стартом
+      for (auto& pair : foundDevices) {
+        delete pair.second.pAdvertisedDevice;
+      }
+      foundDevices.clear();
 
-    // Если найдено только ОДНО устройство, сразу устанавливаем его для подключения
-    if (foundDevices.size() == 1) {
-      // Так как map содержит только 1 элемент, берем его
-      pBmsDevice = foundDevices.begin()->second.pAdvertisedDevice;
-      deviceFound = true;
-      Serial.println("Знайдено 1 пристрій, спроба автоматичного підключення.");
+      Serial.println("Починаємо сканування...");
+      // Сканируем 5 секунд (или пока не найдем)
+      pBLEScan->start(5, false);
+      Serial.printf("Сканування завершено. Знайдено пристроїв: %d\n", foundDevices.size());
+
+      // Если найдено только ОДНО устройство, сразу устанавливаем его для подключения
+      if (foundDevices.size() == 1) {
+        // Так как map содержит только 1 элемент, берем его
+        pBmsDevice = foundDevices.begin()->second.pAdvertisedDevice;
+        deviceFound = true;
+        Serial.println("Знайдено 1 пристрій, спроба автоматичного підключення.");
+      }
+      // Если 0 или >1, то deviceFound остается false. Пользователь должен перейти на /scan
+      // для повторного сканирования или выбора.
     }
-    // Если 0 или >1, то deviceFound остается false. Пользователь должен перейти на /scan
-    // для повторного сканирования или выбора.
-  }
-};
+  };
