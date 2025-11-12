@@ -21,14 +21,13 @@ const char* password = "homewifi1234567890";
 
 // --- Глобальные объекты веб-сервера ---
 WebServer server(80);
-const char* host = "esp32-bms";
-// Имя хоста для доступа по http://esp32-bms.local
 
 // Стандартные UUID для Jikong BMS
 static BLEUUID serviceUUID("0000ffe0-0000-1000-8000-00805f9b34fb");  // Основной сервис
 static BLEUUID charWriteUUID("0000ffe1-0000-1000-8000-00805f9b34fb");
 // Характеристика для ЗАПИСИ
 static BLEUUID charNotifyUUID("0000ffe1-0000-1000-8000-00805f9b34fb");  // Характеристика для УВЕДОМЛЕНИЙ
+#define CCCD_UUID ((uint16_t)0x2902)
 
 // --- Глобальные переменные BLE ---
 struct FoundBMS {
@@ -38,13 +37,14 @@ struct FoundBMS {
 };
 std::map<std::string, FoundBMS> foundDevices;  // Используем MAC-адрес как ключ
 
-static BLEAdvertisedDevice* pBmsDevice = nullptr;  // Инициализируем nullptr
+static BLEClient* pClient = nullptr;
+static BLEAdvertisedDevice* pBmsDevice = nullptr;
 static BLERemoteCharacteristic* pWriteCharacteristic;
 static BLERemoteCharacteristic* pNotifyCharacteristic;
 static BLEScan* pBLEScan;
 static bool deviceFound = false;  // true, только когда выбран конкретный прибор
 static bool isConnected = false;
-uint32_t lastNotifyTime = 0;
+
 
 // Data Processing
 byte receivedBytes[320];
@@ -55,8 +55,8 @@ bool new_data = false;
 int ignoreNotifyCount = 0;
 
 // BMS Data Fields (опущены для краткости, берем из исходника)
-float cellVoltage[16] = { 0 };
-float wireResist[16] = { 0 };
+float cellVoltage[24] = { 0 };
+float wireResist[24] = { 0 };
 float Average_Cell_Voltage = 0;
 float Delta_Cell_Voltage = 0;
 float Battery_Voltage = 0;
@@ -104,19 +104,20 @@ float total_battery_capacity = 0;
 float short_circuit_protection_delay = 0;
 float balance_starting_voltage = 0;
 
-// --- Глобальні змінні для інформації про пристрій (Device Info) ---
-String vendorID_str = "";
-String hardwareVersion_str = "";
-String softwareVersion_str = "";
-uint32_t device_uptime = 0;
-uint32_t powerOnCount = 0;
-String deviceName_str = "";
-String devicePasscode_str = "";
-String manufacturingDate_str = "";
-String serialNumber_str = "";
-String passcode_str = "";
-String userData_str = "";
-String setupPasscode_str = "";
+std::string G_vendorID = "Unknown Vendor";
+std::string G_hardwareVersion = "V0.0";
+std::string G_softwareVersion = "V0.0";
+std::string G_deviceName = "Unknown Device";
+std::string G_devicePasscode = "0000000000000000";
+std::string G_manufacturingDate = "00000000";
+std::string G_serialNumber = "00000000000";
+std::string G_passcode = "00000";
+std::string G_userData = "No user data";
+std::string G_setupPasscode = "0000000000000000";
+
+// uint32_t
+uint32_t G_uptime = 0;
+uint32_t G_powerOnCount = 0;
 
 // Функции BMS (CRC, writeRegister, parseData, bms_settings, parseDeviceInfo, parseBMSData, notifyCallback, MyClientCallback)
 uint8_t crc(const uint8_t data[], uint16_t len) {
@@ -142,18 +143,18 @@ void writeRegister(uint8_t address, uint32_t value, uint8_t length) {
 };
 
 void parseData() {
-  new_data = false;
-  ignoreNotifyCount = 10;
+  new_data = true;
   // Cell voltages
   for (int j = 0, i = 7; i < 38; j++, i += 2) {
     cellVoltage[j] = ((receivedBytes[i] << 8 | receivedBytes[i - 1]) * 0.001);
   }
-  Average_Cell_Voltage = (((int)receivedBytes[75] << 8 | receivedBytes[74]) * 0.001);
-  Delta_Cell_Voltage = (((int)receivedBytes[77] << 8 | receivedBytes[76]) * 0.001);
   // Wire Resistances
   for (int j = 0, i = 81; i < 112; j++, i += 2) {
     wireResist[j] = (((int)receivedBytes[i] << 8 | receivedBytes[i - 1]) * 0.001);
   }
+
+  Average_Cell_Voltage = (((int)receivedBytes[75] << 8 | receivedBytes[74]) * 0.001);
+  Delta_Cell_Voltage = (((int)receivedBytes[77] << 8 | receivedBytes[76]) * 0.001);
 
   // MOS Temperature
   if (receivedBytes[145] == 0xFF) {
@@ -253,54 +254,30 @@ void bms_settings() {
 
 // Функція для парсингу інформації про пристрій
 void parseDeviceInfo() {
-  new_data = false;
+
+  // Перевірка на достатній розмір кадру
   if (frame < 134) {
     return;
   }
+  
+  G_vendorID.assign(receivedBytes + 6, receivedBytes + 6 + 16);
+  G_hardwareVersion.assign(receivedBytes + 22, receivedBytes + 22 + 8);
+  G_softwareVersion.assign(receivedBytes + 30, receivedBytes + 30 + 8);
+  G_deviceName.assign(receivedBytes + 46, receivedBytes + 46 + 16);
+  G_devicePasscode.assign(receivedBytes + 62, receivedBytes + 62 + 16);
+  G_manufacturingDate.assign(receivedBytes + 78, receivedBytes + 78 + 8);
+  G_serialNumber.assign(receivedBytes + 86, receivedBytes + 86 + 11);
+  G_passcode.assign(receivedBytes + 97, receivedBytes + 97 + 5);
+  G_userData.assign(receivedBytes + 102, receivedBytes + 102 + 16);
+  G_setupPasscode.assign(receivedBytes + 118, receivedBytes + 118 + 16);
 
-  // Код змінено для використання глобальних String змінних.
-  vendorID_str.clear();
-  for (int i = 0; i < 16; i++) vendorID_str += (char)receivedBytes[6 + i];
-
-  hardwareVersion_str.clear();
-  for (int i = 0; i < 8; i++) hardwareVersion_str += (char)receivedBytes[22 + i];
-
-  softwareVersion_str.clear();
-  for (int i = 0; i < 8; i++) softwareVersion_str += (char)receivedBytes[30 + i];
-
-  device_uptime = (receivedBytes[41] << 24) | (receivedBytes[40] << 16) | (receivedBytes[39] << 8) | receivedBytes[38];
-
-  powerOnCount = (receivedBytes[45] << 24) | (receivedBytes[44] << 16) | (receivedBytes[43] << 8) | receivedBytes[42];
-
-  deviceName_str.clear();
-  for (int i = 0; i < 16; i++) deviceName_str += (char)receivedBytes[46 + i];
-  devicePasscode_str.clear();
-  for (int i = 0; i < 16; i++) devicePasscode_str += (char)receivedBytes[62 + i];
-
-  manufacturingDate_str.clear();
-  for (int i = 0; i < 8; i++) manufacturingDate_str += (char)receivedBytes[78 + i];
-
-  serialNumber_str.clear();
-  for (int i = 0; i < 11; i++) serialNumber_str += (char)receivedBytes[86 + i];
-
-  passcode_str.clear();
-  for (int i = 0; i < 5; i++) passcode_str += (char)receivedBytes[97 + i];
-
-  userData_str.clear();
-  for (int i = 0; i < 16; i++) userData_str += (char)receivedBytes[102 + i];
-
-  setupPasscode_str.clear();
-  for (int i = 0; i < 16; i++) setupPasscode_str += (char)receivedBytes[118 + i];
+  // Для uint32_t
+  G_uptime = (receivedBytes[41] << 24) | (receivedBytes[40] << 16) | (receivedBytes[39] << 8) | receivedBytes[38];
+  G_powerOnCount = (receivedBytes[45] << 24) | (receivedBytes[44] << 16) | (receivedBytes[43] << 8) | receivedBytes[42];
 };
 
 // Функция для парсинга (разбора) данных.
 void parseBMSData(uint8_t* pData, size_t length) {
-  lastNotifyTime = millis();
-  if (ignoreNotifyCount > 0) {
-    ignoreNotifyCount--;
-    return;
-  }
-
   // Check for start of data frame
   if (pData[0] == 0x55 && pData[1] == 0xAA && pData[2] == 0xEB && pData[3] == 0x90) {
     frame = 0;
@@ -317,7 +294,6 @@ void parseBMSData(uint8_t* pData, size_t length) {
       if (frame >= 300) {
         received_complete = true;
         received_start = false;
-        new_data = true;
         // Determine the type of data frame based on receivedBytes[4]
         switch (receivedBytes[4]) {  // Use receivedBytes[4] instead of pData[4]
           case 0x01:
@@ -337,7 +313,7 @@ void parseBMSData(uint8_t* pData, size_t length) {
       }
     }
   }
-}
+};
 
 // Обратный вызов (callback) для УВЕДОМЛЕНИЙ
 static void notifyCallback(
@@ -345,80 +321,43 @@ static void notifyCallback(
   uint8_t* pData,
   size_t length,
   bool isNotify) {
+  if (length < 10) {
+    return;
+  }
   parseBMSData(pData, length);
-}
+};
 
 // Обратный вызов (callback) для СТАТУСА ПОДКЛЮЧЕНИЯ
 class MyClientCallback : public BLEClientCallbacks {
   void onConnect(BLEClient* pClient) {
     isConnected = true;
-  }
+  };
 
   void onDisconnect(BLEClient* pClient) {
     isConnected = false;
     deviceFound = false;
     pBmsDevice = nullptr;  // Сбрасываем выбранное устройство
-  }
+  };
 };
 
-#define CCCD_UUID ((uint16_t)0x2902)
+void bleScanTask() {
 
-// Функция попытки подключения к BMS
-bool connectToBMS() {
-  if (pBmsDevice == nullptr) return false;
-
-  BLEClient* pClient = BLEDevice::createClient();
-  pClient->setClientCallbacks(new MyClientCallback());
-
-  if (!pClient->connect(pBmsDevice)) {
-    Serial.println("Не удалось подключиться.");
-    return false;
+  // Очищаємо попередні результати
+  // !!! УВАГА: Якщо foundDevices не захищена м'ютексом, тут може бути гонка даних
+  // !!! з основним кодом. Простий lock (м'ютекс) був би безпечнішим.
+  for (auto& pair : foundDevices) {
+    delete pair.second.pAdvertisedDevice;
   }
+  foundDevices.clear();
 
-  // Получаем сервис
-  BLERemoteService* pRemoteService = pClient->getService(serviceUUID);
-  if (pRemoteService == nullptr) {
-    pClient->disconnect();
-    return false;
-  }
+  Serial.println("Починаємо асинхронне сканування...");
 
-  // Получаем характеристику для записи
-  pWriteCharacteristic = pRemoteService->getCharacteristic(charWriteUUID);
-  if (pWriteCharacteristic == nullptr) {
-    pClient->disconnect();
-    return false;
-  }
+  // Скануємо 5 секунд
+  // Параметр 'false' означає, що ми не повертаємо результати, а обробляємо їх
+  // через Callbacks. Якщо використовуєте просту бібліотеку, це може бути блокуючий виклик.
+  pBLEScan->start(5, false);
 
-  // Получаем характеристику для уведомлений
-  pNotifyCharacteristic = pRemoteService->getCharacteristic(charNotifyUUID);
-  if (pNotifyCharacteristic == nullptr) {
-    pClient->disconnect();
-    return false;
-  }
-
-  if (pNotifyCharacteristic->canNotify()) {
-    // Step 1: Register the callback function
-    pNotifyCharacteristic->registerForNotify(notifyCallback);
-    // Step 2: Get the CCCD descriptor
-    BLERemoteDescriptor* pCCCD = pNotifyCharacteristic->getDescriptor(BLEUUID(CCCD_UUID));
-    if (pCCCD != nullptr) {
-      // Step 3: Write the value to enable notifications (0x01)
-      // For Indications, use {0x2, 0x0}
-      uint8_t notifyOn[] = { 0x1, 0x0 };
-      // Write the 2-byte value to the descriptor
-      pCCCD->writeValue(notifyOn, 2, true);
-      isConnected = true;
-      delay(500);
-      writeRegister(0x97, 0x00000000, 0x00);  // COMMAND_DEVICE_INFO
-      delay(500);
-      writeRegister(0x96, 0x00000000, 0x00);  // COMMAND_CELL_INFO
-    } else {
-      return false;
-    }
-  } else {
-    return false;
-  }
-  return true;
+  Serial.printf("Сканування завершено. Знайдено пристроїв: %d\n", foundDevices.size());
 }
 
 // Обратный вызов (callback) для СКАНЕРА (обновлено)
@@ -441,17 +380,84 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
         bms.pAdvertisedDevice = new BLEAdvertisedDevice(advertisedDevice);
 
         foundDevices[deviceAddress] = bms;
-      }
-    }
-  }
+      };
+    };
+  };
 };
+
+
 // ----------------------------------------------------------------------------------
 // --- Функции веб-сервера (Web Server Functions) ---
 // ----------------------------------------------------------------------------------
 
-// --- НОВЫЕ ФУНКЦИИ ДЛЯ ВЫБОРА УСТРОЙСТВА ---
-void handleSelectDevice() {
+void handleScan() {
+  // Очищаємо попередні результати перед новим скануванням (якщо необхідно)
+  foundDevices.clear();
+
+  // Встановлюємо таймер на 10 секунд для автоматичного переходу до результатів
+  int scanDurationSeconds = 5;
+
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Сканування BMS</title>";
+  // !!! КЛЮЧОВИЙ МОМЕНТ: Автоматичне перенаправлення
+  html += "<meta http-equiv='refresh' content='" + String(scanDurationSeconds) + ";url=/select_device'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  html += "<style>";
+  html += "body{font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f4f7f6; color: #333;}";
+  html += ".container {max-width: 600px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);}";
+  html += "h1 {text-align: center; color: #0056b3; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px;}";
+  html += "p {text-align: center; color: #666;}";
+  html += ".loader {border: 6px solid #f3f3f3; border-top: 6px solid #007bff; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 20px auto;}";
+  html += "@keyframes spin {0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); }}";
+  html += "</style></head><body><div class='container'>";
+  html += "<h1><strong>📶 Йде сканування пристроїв...</h1>";
+  html += "<div class='loader'></div>";
+  html += "<p>Будь ласка, зачекайте " + String(scanDurationSeconds) + " секунд. Ви будете автоматично перенаправлені.</p>";
+  html += "<p><a href='/'>Назад до головної</a></p>";
+  html += "</div></body></html>";
+
   server.sendHeader("Connection", "close");
+  server.send(200, "text/html; charset=UTF-8", html);
+
+  bleScanTask();
+}
+
+void handleDisconnect() {
+  // Очищаємо попередні результати перед новим скануванням (якщо необхідно)
+  foundDevices.clear();
+  if (isConnected) {
+    Serial.println("Ініціалізація відключення від BMS...");
+
+    // 2. ОЧИЩЕННЯ СТАРОГО КЛІЄНТА (якщо він існував)
+    if (pClient != nullptr) {
+      // Розриваємо будь-яке старе з'єднання
+      if (pClient->isConnected()) {
+        pClient->disconnect();
+      }
+      // Звільняємо пам'ять попереднього клієнта
+      delete pClient;
+      pClient = nullptr;
+    }
+
+    // 4. Очищення глобальних прапорів
+    isConnected = false;
+
+    // Очищення інших глобальних вказівників, якщо вони існують
+    pWriteCharacteristic = nullptr;
+    pNotifyCharacteristic = nullptr;
+
+    Serial.println("Відключення завершено. Ресурси звільнено.");
+  } else {
+    // Якщо клієнт не існує або вже відключений
+    Serial.println("Пристрій BLE вже відключений або не був підключений.");
+  }
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain; charset=UTF-8", "Redirecting...");
+}
+
+
+void handleSelectDevice() {
+  // В цьому місці bleScan() вже має завершитися
+
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Вибір BMS</title>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
   html += "<style>";
@@ -464,12 +470,15 @@ void handleSelectDevice() {
   html += "button {background-color: #28a745; color: white; padding: 8px 12px; border: none; border-radius: 5px; cursor: pointer;}";
   html += "button:hover {background-color: #218838;}";
   html += "p {text-align: center; color: #666;}";
+  html += ".scan-btn {display:inline-block; background-color:#ffc107; color:#333; padding:10px 20px; border-radius:5px; text-decoration:none; margin-top: 15px;}";
   html += "</style></head><body><div class='container'>";
+
   html += "<h1>📶 Виберіть Jikong BMS для підключення</h1>";
 
   if (foundDevices.empty()) {
-    html += "<p><strong>Пристроїв не знайдено.</strong> Натисніть кнопку, щоб повторити сканування.</p>";
-    html += "<p><a href='/scan' style='display:inline-block; background-color:#ffc107; color:#333; padding:10px 20px; border-radius:5px; text-decoration:none;'>Повторне сканування</a></p>";
+    html += "<p><strong>Пристроїв не знайдено.</strong> Переконайтеся, що BMS увімкнено та знаходиться поруч.</p>";
+    // Кнопка для повторного запуску сканування
+    html += "<p style='text-align: center;'><a href='/scan' class='scan-btn'>Повторне сканування</a></p>";
   } else {
     html += "<p>Знайдено **" + String(foundDevices.size()) + "** пристроїв. Виберіть один:</p>";
     html += "<form action='/connect' method='get'><table><tr><th>Ім'я</th><th>MAC-адреса</th><th>Дія</th></tr>";
@@ -481,36 +490,15 @@ void handleSelectDevice() {
       html += "<td><button type='submit' name='mac' value='" + String(pair.second.address.c_str()) + "'>ПІДКЛЮЧИТИСЯ</button></td>";
       html += "</tr>";
     }
-
     html += "</table></form>";
   }
 
   html += "<p><a href='/'>Назад до головної</a> (якщо вже підключено)</p>";
   html += "</div></body></html>";
+
+  server.sendHeader("Connection", "close");
   server.send(200, "text/html; charset=UTF-8", html);
 }
-
-void handleConnect() {
-  if (server.hasArg("mac")) {
-    std::string macAddress = server.arg("mac").c_str();
-
-    if (foundDevices.count(macAddress)) {
-      // Освобождаем старую память, если pBmsDevice уже был установлен (должен быть очищен в onDisconnect)
-      if (pBmsDevice != nullptr) {
-        // ВАЖНО: Не удаляем, так как это память из foundDevices
-      }
-      // Устанавливаем выбранное устройство (используем хранящийся указатель)
-      pBmsDevice = foundDevices[macAddress].pAdvertisedDevice;
-      deviceFound = true;  // Триггер для loop()
-      Serial.printf("Вибрано пристрій для підключення: %s\n", macAddress.c_str());
-    } else {
-      Serial.printf("Помилка: Невідома MAC-адреса: %s\n", macAddress.c_str());
-    }
-  }
-  server.sendHeader("Location", "/");
-  server.send(302, "text/plain; charset=UTF-8", "Redirecting...");
-}
-
 
 void handleRoot() {
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
@@ -537,7 +525,7 @@ void handleRoot() {
   html += ".control-button.off {background-color: #dc3545;}";
   html += ".control-button.toggle-on {background-color: #28a745;}";
   html += ".control-button.toggle-off {background-color: #dc3545;}";
-  html += ".control-button.discharge {background-color: #ffc107; color: #333;}";  // Жовта для розряду
+  html += ".control-button.discharge {background-color: #ffc107; color: #333;}";
   html += ".control-button.discharge.off {background-color: #dc3545; color: white;}";
   html += ".control-button:hover {opacity: 0.9;}";
 
@@ -559,14 +547,15 @@ void handleRoot() {
     html += "</div></body></html>";
     server.send(200, "text/html; charset=UTF-8", html);
     return;  // Выходим, не показывая остальной контент
+  } else {
+    String connectionStatus = isConnected ? "<span class='status-connected'>ПІДКЛЮЧЕНО</span>" : "<span class='status-disconnected'>ВІДКЛЮЧЕНО</span>";
+    html += "<p><em>IP-адреса: <strong>" + WiFi.localIP().toString() + "</strong> | Статус BMS: " + connectionStatus + "</em></p>";
+    html += "<p><em><a href='/disconnect' class='disconnect-button'>❌ ВІДКЛЮЧИТИСЯ</a></em></p>";
   }
-
-
-  String connectionStatus = isConnected ? "<span class='status-connected'>ПІДКЛЮЧЕНО</span>" : "<span class='status-disconnected'>ВІДКЛЮЧЕНО</span>";
-  html += "<p><em>IP-адреса: <strong>" + WiFi.localIP().toString() + "</strong> | Статус BMS: " + connectionStatus + "</em></p>";
 
   // --- Кнопка OTA ---
   html += "<a href='/update' class='ota-button'>Оновлення прошивки (OTA)</a>";
+
   // --- Загальні дані ---
   html += "<h2>📊 Загальні дані</h2>";
   html += "<table>";
@@ -634,78 +623,95 @@ void handleRoot() {
     }
   }
   html += "</table>";
-  // --------------------------------------------------------------------------
-  // --- Модифицированный раздел Налаштування BMS с полями ввода и кнопкой Змінити ---
-  // --------------------------------------------------------------------------
-  html += "<h2>⚙️ Налаштування BMS / Редагування</h2>";
-  // Форма для отправки данных (method POST, action - новый обработчик)
-  html += "<form action='/settings_update' method='post'>";
 
+  // --- НОВА СЕКЦІЯ: Інформація про Пристрій ESP ---
+  html += "<h2>⚙️ Інформація про Пристрій JK</h2>";
   html += "<table>";
-  html += "<tr><th>Параметр</th><th>Значення</th><th>Од. виміру</th></tr>";
-
-  // ОСНОВНЫЕ НАСТРОЙКИ
-  html += "<tr><td>Загальна ємність батареї</td><td><input type='number' step='0.01' name='total_battery_capacity' value='" + String(total_battery_capacity, 2) + "' required></td><td>Ah</td></tr>";
-  // 0x4D
-  html += "<tr><td>Кількість комірок</td><td><input type='number' step='1' name='cell_count' value='" + String(cell_count) + "' required></td><td></td></tr>";
-  // 0x4B
-  html += "<tr><td>Напруга вимкнення (Power Off)</td><td><input type='number' step='0.001' name='power_off_voltage' value='" + String(power_off_voltage, 3) + "' required></td><td>V</td></tr>";
-  // 0x4C
-
-  // НАСТРОЙКИ НАПРЯЖЕНИЯ И БАЛАНСИРОВКИ
-  html += "<tr><td>Напруга початку балансування</td><td><input type='number' step='0.001' name='balance_starting_voltage' value='" + String(balance_starting_voltage, 3) + "' required></td><td>V</td></tr>";
-  // 0x5B
-  html += "<tr><td>Напруга спрацювання балансування</td><td><input type='number' step='0.001' name='balance_trigger_voltage' value='" + String(balance_trigger_voltage, 3) + "' required></td><td>V</td></tr>";
-  // 0x45
-  html += "<tr><td>Макс. струм балансування</td><td><input type='number' step='0.001' name='max_balance_current' value='" + String(max_balance_current, 3) + "' required></td><td>A</td></tr>";
-  // 0x4A
-
-  // ЗАЩИТА ПО НАПРЯЖЕНИЮ
-  html += "<tr><td>**Захист: Мін. напруга комірки**</td><td><input type='number' step='0.001' name='cell_uvp' value='" + String(cell_voltage_undervoltage_protection, 3) + "' required></td><td>V</td></tr>";
-  // 0x41
-  html += "<tr><td>Відновлення: Мін. напруга комірки</td><td><input type='number' step='0.001' name='cell_uvr' value='" + String(cell_voltage_undervoltage_recovery, 3) + "' required></td><td>V</td></tr>";
-  // 0x42
-  html += "<tr><td>**Захист: Макс. напруга комірки**</td><td><input type='number' step='0.001' name='cell_ovp' value='" + String(cell_voltage_overvoltage_protection, 3) + "' required></td><td>V</td></tr>";
-  // 0x43
-  html += "<tr><td>Відновлення: Макс. напруга комірки</td><td><input type='number' step='0.001' name='cell_ovr' value='" + String(cell_voltage_overvoltage_recovery, 3) + "' required></td><td>V</td></tr>";
-  // 0x44
-
-  // НАСТРОЙКИ ТОКА И ЗАЩИТЫ
-  html += "<tr><td>**Захист: Макс. струм заряду**</td><td><input type='number' step='0.01' name='max_charge_current' value='" + String(max_charge_current, 2) + "' required></td><td>A</td></tr>";
-  // 0x46
-  html += "<tr><td>Затримка захисту від переструму (Заряд)</td><td><input type='number' step='1' name='charge_oc_delay' value='" + String(charge_overcurrent_protection_delay, 0) + "' required></td><td>с</td></tr>";
-  // 0x47
-  html += "<tr><td>Час відновлення від переструму (Заряд)</td><td><input type='number' step='1' name='charge_oc_recovery' value='" + String(charge_overcurrent_protection_recovery_time, 0) + "' required></td><td>с</td></tr>";
-  // 0x48
-  html += "<tr><td>**Захист: Макс. струм розряду**</td><td><input type='number' step='0.01' name='max_discharge_current' value='" + String(max_discharge_current, 2) + "' required></td><td>A</td></tr>";
-  // 0x49
-  //html += "<tr><td>Затримка захисту від КЗ</td><td><input type='number' step='1' name='sc_delay' value='" + String(short_circuit_protection_delay, 0) + "' required></td><td>мкс</td></tr>";
-  // 0x5A
-  html += "<tr><td>Час відновлення від КЗ</td><td><input type='number' step='1' name='sc_recovery' value='" + String(short_circuit_protection_recovery_time, 0) + "' required></td><td>с</td></tr>";
-  // 0x4E
-
-  // НАСТРОЙКИ ТЕМПЕРАТУРЫ
-  html += "<tr><td>**Захист: Перегрів (Заряд)**</td><td><input type='number' step='0.1' name='charge_ot_prot' value='" + String(charge_overtemperature_protection, 1) + "' required></td><td>°C</td></tr>";
-  // 0x50
-  html += "<tr><td>Відновлення: Перегрів (Заряд)</td><td><input type='number' step='0.1' name='charge_ot_rec' value='" + String(charge_overtemperature_protection_recovery, 1) + "' required></td><td>°C</td></tr>";
-  // 0x53
-  html += "<tr><td>**Захист: Перегрів (Розряд)**</td><td><input type='number' step='0.1' name='discharge_ot_prot' value='" + String(discharge_overtemperature_protection, 1) + "' required></td><td>°C</td></tr>";
-  // 0x54
-  html += "<tr><td>Відновлення: Перегрів (Розряд)</td><td><input type='number' step='0.1' name='discharge_ot_rec' value='" + String(discharge_overtemperature_protection_recovery, 1) + "' required></td><td>°C</td></tr>";
-  // 0x55
-  html += "<tr><td>**Захист: Недогрів (Заряд)**</td><td><input type='number' step='0.1' name='charge_ut_prot' value='" + String(charge_undertemperature_protection, 1) + "' required></td><td>°C</td></tr>";
-  // 0x56
-  html += "<tr><td>Відновлення: Недогрів (Заряд)</td><td><input type='number' step='0.1' name='charge_ut_rec' value='" + String(charge_undertemperature_protection_recovery, 1) + "' required></td><td>°C</td></tr>";
-  // 0x57
-  html += "<tr><td>**Захист: Перегрів силових ключів**</td><td><input type='number' step='0.1' name='power_tube_ot_prot' value='" + String(power_tube_overtemperature_protection, 1) + "' required></td><td>°C</td></tr>";
-  // 0x58
-  html += "<tr><td>Відновлення: Перегрів силових ключів</td><td><input type='number' step='0.1' name='power_tube_ot_rec' value='" + String(power_tube_overtemperature_protection_recovery, 1) + "' required></td><td>°C</td></tr>";
-  // 0x59
-
+  html += "<tr><th>Параметр</th><th>Значення</th></tr>";
+  // Примітка: використовується G_ prefixed глобальні змінні
+  html += "<tr><td>ID Виробника (Vendor ID)</td><td>" + String(G_vendorID.c_str()) + "</td></tr>";
+  html += "<tr><td>Ім'я Пристрою</td><td>" + String(G_deviceName.c_str()) + "</td></tr>";
+  html += "<tr><td>Серійний Номер</td><td>" + String(G_serialNumber.c_str()) + "</td></tr>";
+  html += "<tr><td>Версія Апаратного Забезпечення</td><td>" + String(G_hardwareVersion.c_str()) + "</td></tr>";
+  html += "<tr><td>Версія Програмного Забезпечення</td><td>" + String(G_softwareVersion.c_str()) + "</td></tr>";
+  html += "<tr><td>Час роботи (Uptime, сек)</td><td>" + String(G_uptime) + "</td></tr>"; 
+  html += "<tr><td>Счетчик Включень</td><td>" + String(G_powerOnCount) + "</td></tr>";
+  html += "<tr><td>Дата Виготовлення</td><td>" + String(G_manufacturingDate.c_str()) + "</td></tr>";
+  html += "<tr><td>Користувацькі Дані</td><td>" + String(G_userData.c_str()) + "</td></tr>";
+  html += "<tr><td>Пароль Пристрою (Passcode)</td><td>" + String(G_devicePasscode.c_str()) + "</td></tr>";
+  html += "<tr><td>Пароль Налаштування</td><td>" + String(G_setupPasscode.c_str()) + "</td></tr>";
+  html += "<tr><td>Короткий Пароль</td><td>" + String(G_passcode.c_str()) + "</td></tr>";
   html += "</table>";
-  // Кнопка сохранения настроек
-  html += "<input type='submit' class='ota-button' value='ЗБЕРЕГТИ НАЛАШТУВАННЯ' style='background-color:#007bff; margin-top:10px;'>";
-  html += "</form>";
+  // --- КІНЕЦЬ НОВОЇ СЕКЦІЇ ---
+
+  // // --------------------------------------------------------------------------
+  // // --- Модифицированный раздел Налаштування BMS с полями ввода и кнопкой Змінити ---
+  // // --------------------------------------------------------------------------
+  // html += "<h2>⚙️ Налаштування BMS / Редагування</h2>";
+  // // Форма для отправки данных (method POST, action - новый обработчик)
+  // html += "<form action='/settings_update' method='post'>";
+
+  // html += "<table>";
+  // html += "<tr><th>Параметр</th><th>Значення</th><th>Од. виміру</th></tr>";
+
+  // // ОСНОВНЫЕ НАСТРОЙКИ
+  // html += "<tr><td>Загальна ємність батареї</td><td><input type='number' step='0.01' name='total_battery_capacity' value='" + String(total_battery_capacity, 2) + "' required></td><td>Ah</td></tr>";
+  // // 0x4D
+  // html += "<tr><td>Кількість комірок</td><td><input type='number' step='1' name='cell_count' value='" + String(cell_count) + "' required></td><td></td></tr>";
+  // // 0x4B
+  // html += "<tr><td>Напруга вимкнення (Power Off)</td><td><input type='number' step='0.001' name='power_off_voltage' value='" + String(power_off_voltage, 3) + "' required></td><td>V</td></tr>";
+  // // 0x4C
+
+  // // НАСТРОЙКИ НАПРЯЖЕНИЯ И БАЛАНСИРОВКИ
+  // html += "<tr><td>Напруга початку балансування</td><td><input type='number' step='0.001' name='balance_starting_voltage' value='" + String(balance_starting_voltage, 3) + "' required></td><td>V</td></tr>";
+  // // 0x5B
+  // html += "<tr><td>Напруга спрацювання балансування</td><td><input type='number' step='0.001' name='balance_trigger_voltage' value='" + String(balance_trigger_voltage, 3) + "' required></td><td>V</td></tr>";
+  // // 0x45
+  // html += "<tr><td>Макс. струм балансування</td><td><input type='number' step='0.001' name='max_balance_current' value='" + String(max_balance_current, 3) + "' required></td><td>A</td></tr>";
+  // // 0x4A
+
+  // // ЗАЩИТА ПО НАПРЯЖЕНИЮ
+  // html += "<tr><td>**Захист: Мін. напруга комірки**</td><td><input type='number' step='0.001' name='cell_uvp' value='" + String(cell_voltage_undervoltage_protection, 3) + "' required></td><td>V</td></tr>";
+  // // 0x41
+  // html += "<tr><td>Відновлення: Мін. напруга комірки</td><td><input type='number' step='0.001' name='cell_uvr' value='" + String(cell_voltage_undervoltage_recovery, 3) + "' required></td><td>V</td></tr>";
+  // // 0x42
+  // html += "<tr><td>**Захист: Макс. напруга комірки**</td><td><input type='number' step='0.001' name='cell_ovp' value='" + String(cell_voltage_overvoltage_protection, 3) + "' required></td><td>V</td></tr>";
+  // // 0x43
+  // html += "<tr><td>Відновлення: Макс. напруга комірки</td><td><input type='number' step='0.001' name='cell_ovr' value='" + String(cell_voltage_overvoltage_recovery, 3) + "' required></td><td>V</td></tr>";
+  // // 0x44
+
+  // // НАСТРОЙКИ ТОКА И ЗАЩИТЫ
+  // html += "<tr><td>**Захист: Макс. струм заряду**</td><td><input type='number' step='0.01' name='max_charge_current' value='" + String(max_charge_current, 2) + "' required></td><td>A</td></tr>";
+  // // 0x46
+  // html += "<tr><td>Затримка захисту від переструму (Заряд)</td><td><input type='number' step='1' name='charge_oc_delay' value='" + String(charge_overcurrent_protection_delay, 0) + "' required></td><td>с</td></tr>";
+  // // 0x47
+  // html += "<tr><td>Час відновлення від переструму (Заряд)</td><td><input type='number' step='1' name='charge_oc_recovery' value='" + String(charge_overcurrent_protection_recovery_time, 0) + "' required></td><td>с</td></tr>";
+  // // 0x48
+  // html += "<tr><td>**Захист: Макс. струм розряду**</td><td><input type='number' step='0.01' name='max_discharge_current' value='" + String(max_discharge_current, 2) + "' required></td><td>A</td></tr>";
+  // // 0x5A
+  // html += "<tr><td>Час відновлення від КЗ</td><td><input type='number' step='1' name='sc_recovery' value='" + String(short_circuit_protection_recovery_time, 0) + "' required></td><td>с</td></tr>";
+  // // НАСТРОЙКИ ТЕМПЕРАТУРЫ
+  // html += "<tr><td>**Захист: Перегрів (Заряд)**</td><td><input type='number' step='0.1' name='charge_ot_prot' value='" + String(charge_overtemperature_protection, 1) + "' required></td><td>°C</td></tr>";
+  // // 0x50
+  // html += "<tr><td>Відновлення: Перегрів (Заряд)</td><td><input type='number' step='0.1' name='charge_ot_rec' value='" + String(charge_overtemperature_protection_recovery, 1) + "' required></td><td>°C</td></tr>";
+  // // 0x53
+  // html += "<tr><td>**Захист: Перегрів (Розряд)**</td><td><input type='number' step='0.1' name='discharge_ot_prot' value='" + String(discharge_overtemperature_protection, 1) + "' required></td><td>°C</td></tr>";
+  // // 0x54
+  // html += "<tr><td>Відновлення: Перегрів (Розряд)</td><td><input type='number' step='0.1' name='discharge_ot_rec' value='" + String(discharge_overtemperature_protection_recovery, 1) + "' required></td><td>°C</td></tr>";
+  // // 0x55
+  // html += "<tr><td>**Захист: Недогрів (Заряд)**</td><td><input type='number' step='0.1' name='charge_ut_prot' value='" + String(charge_undertemperature_protection, 1) + "' required></td><td>°C</td></tr>";
+  // // 0x56
+  // html += "<tr><td>Відновлення: Недогрів (Заряд)</td><td><input type='number' step='0.1' name='charge_ut_rec' value='" + String(charge_undertemperature_protection_recovery, 1) + "' required></td><td>°C</td></tr>";
+  // // 0x57
+  // html += "<tr><td>**Захист: Перегрів силових ключів**</td><td><input type='number' step='0.1' name='power_tube_ot_prot' value='" + String(power_tube_overtemperature_protection, 1) + "' required></td><td>°C</td></tr>";
+  // // 0x58
+  // html += "<tr><td>Відновлення: Перегрів силових ключів</td><td><input type='number' step='0.1' name='power_tube_ot_rec' value='" + String(power_tube_overtemperature_protection_recovery, 1) + "' required></td><td>°C</td></tr>";
+  // // 0x59
+
+  // html += "</table>";
+  // // Кнопка сохранения настроек
+  // html += "<input type='submit' class='ota-button' value='ЗБЕРЕГТИ НАЛАШТУВАННЯ' style='background-color:#007bff; margin-top:10px;'>";
+  // html += "</form>";
 
   html += "</div></body></html>";
   server.send(200, "text/html; charset=UTF-8", html);
@@ -832,137 +838,189 @@ void handleSettingsUpdate() {
   }
 
   if (isConnected) {
+    const float FLOAT_TOLERANCE = 0.001;  // Допуск для сравнения float
+
     // Общая емкость (Total Capacity): Регистр 0x4D, float * 1000
-    if (server.hasArg("total_battery_capacity") != total_battery_capacity) {
+    if (server.hasArg("total_battery_capacity")) {
       float val = server.arg("total_battery_capacity").toFloat();
-      writeRegister(0x4D, (uint32_t)(val * 1000), 0x04);
+      // КОРРЕКТНОЕ УСЛОВИЕ ДЛЯ FLOAT: Сравниваем новое значение с текущим через допуск
+      if (abs(val - total_battery_capacity) > FLOAT_TOLERANCE) {
+        writeRegister(0x4D, (uint32_t)(val * 1000), 0x04);
+        // Обновляем локальную переменную, чтобы избежать повторной записи в следующем цикле
+        total_battery_capacity = val;
+      }
     }
 
     // Количество ячеек (Cell Count): Регистр 0x4B, int * 1
-    if (server.hasArg("cell_count") != cell_count) {
+    if (server.hasArg("cell_count")) {
       int val = server.arg("cell_count").toInt();
-      writeRegister(0x4B, (uint32_t)val, 0x04);
+      // КОРРЕКТНОЕ УСЛОВИЕ ДЛЯ INT: Сравниваем напрямую
+      if (val != cell_count) {
+        writeRegister(0x4B, (uint32_t)val, 0x04);
+        cell_count = val;
+      }
     }
 
     // Напряжение выключения (Power Off Voltage): Регистр 0x4C, float * 1000
-    if (server.hasArg("power_off_voltage") != power_off_voltage) {
+    if (server.hasArg("power_off_voltage")) {
       float val = server.arg("power_off_voltage").toFloat();
-      writeRegister(0x4C, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - power_off_voltage) > FLOAT_TOLERANCE) {
+        writeRegister(0x4C, (uint32_t)(val * 1000), 0x04);
+        power_off_voltage = val;
+      }
     }
 
     // Напряжение начала балансировки (Balance Starting Voltage): Регистр 0x5B, float * 1000
-    if (server.hasArg("balance_starting_voltage") != balance_starting_voltage) {
+    if (server.hasArg("balance_starting_voltage")) {
       float val = server.arg("balance_starting_voltage").toFloat();
-      writeRegister(0x5B, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - balance_starting_voltage) > FLOAT_TOLERANCE) {
+        writeRegister(0x5B, (uint32_t)(val * 1000), 0x04);
+        balance_starting_voltage = val;
+      }
     }
 
     // Напряжение срабатывания балансировки (Balance Trigger Voltage): Регистр 0x45, float * 1000
-    if (server.hasArg("balance_trigger_voltage") != balance_trigger_voltage) {
+    if (server.hasArg("balance_trigger_voltage")) {
       float val = server.arg("balance_trigger_voltage").toFloat();
-      writeRegister(0x45, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - balance_trigger_voltage) > FLOAT_TOLERANCE) {
+        writeRegister(0x45, (uint32_t)(val * 1000), 0x04);
+        balance_trigger_voltage = val;
+      }
     }
 
     // Макс. ток балансировки (Max Balance Current): Регистр 0x4A, float * 1000
-    if (server.hasArg("max_balance_current") != max_balance_current) {
+    if (server.hasArg("max_balance_current")) {
       float val = server.arg("max_balance_current").toFloat();
-      writeRegister(0x4A, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - max_balance_current) > FLOAT_TOLERANCE) {
+        writeRegister(0x4A, (uint32_t)(val * 1000), 0x04);
+        max_balance_current = val;
+      }
     }
 
     // Напряжения ячеек (Cell Voltages): Регистры 0x41 - 0x44, float * 1000
-    if (server.hasArg("cell_uvp") != cell_voltage_undervoltage_protection) {  // UVP: Undervoltage Protection (0x41)
+    if (server.hasArg("cell_uvp")) {
       float val = server.arg("cell_uvp").toFloat();
-      writeRegister(0x41, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - cell_voltage_undervoltage_protection) > FLOAT_TOLERANCE) {
+        writeRegister(0x41, (uint32_t)(val * 1000), 0x04);
+        cell_voltage_undervoltage_protection = val;
+      }
     }
-    if (server.hasArg("cell_uvr") != cell_voltage_undervoltage_recovery) {  // UVR: Undervoltage Recovery (0x42)
+    if (server.hasArg("cell_uvr")) {
       float val = server.arg("cell_uvr").toFloat();
-      writeRegister(0x42, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - cell_voltage_undervoltage_recovery) > FLOAT_TOLERANCE) {
+        writeRegister(0x42, (uint32_t)(val * 1000), 0x04);
+        cell_voltage_undervoltage_recovery = val;
+      }
     }
-    if (server.hasArg("cell_ovp") != cell_voltage_overvoltage_protection) {  // OVP: Overvoltage Protection (0x43)
+    if (server.hasArg("cell_ovp")) {
       float val = server.arg("cell_ovp").toFloat();
-      writeRegister(0x43, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - cell_voltage_overvoltage_protection) > FLOAT_TOLERANCE) {
+        writeRegister(0x43, (uint32_t)(val * 1000), 0x04);
+        cell_voltage_overvoltage_protection = val;
+      }
     }
-    if (server.hasArg("cell_ovr") != cell_voltage_overvoltage_recovery) {  // OVR: Overvoltage Recovery (0x44)
+    if (server.hasArg("cell_ovr")) {
       float val = server.arg("cell_ovr").toFloat();
-      writeRegister(0x44, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - cell_voltage_overvoltage_recovery) > FLOAT_TOLERANCE) {
+        writeRegister(0x44, (uint32_t)(val * 1000), 0x04);
+        cell_voltage_overvoltage_recovery = val;
+      }
     }
 
-    // Токовые настройки (Current Settings): Регистры 0x46 - 0x49, int * 1 (delay) / float * 1000 (current)
-    if (server.hasArg("max_charge_current") != max_charge_current) {  // Max Charge Current (0x46)
+    // Токовые настройки (Current Settings): Регистры 0x46 - 0x49
+    if (server.hasArg("max_charge_current")) {
       float val = server.arg("max_charge_current").toFloat();
-      writeRegister(0x46, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - max_charge_current) > FLOAT_TOLERANCE) {
+        writeRegister(0x46, (uint32_t)(val * 1000), 0x04);
+        max_charge_current = val;
+      }
     }
-    if (server.hasArg("charge_oc_delay") != charge_overcurrent_protection_recovery_time) {  // Charge OC Delay (0x47)
+    if (server.hasArg("charge_oc_delay")) {
       int val = server.arg("charge_oc_delay").toInt();
-      writeRegister(0x47, (uint32_t)val, 0x04);
+      if (val != charge_overcurrent_protection_delay) {  // Предполагаю, что delay - int
+        writeRegister(0x47, (uint32_t)val, 0x04);
+        charge_overcurrent_protection_delay = val;
+      }
     }
-    if (server.hasArg("charge_oc_recovery") != charge_overcurrent_protection_recovery_time) {  // Charge OC Recovery (0x48)
+    if (server.hasArg("charge_oc_recovery")) {
       int val = server.arg("charge_oc_recovery").toInt();
-      writeRegister(0x48, (uint32_t)val, 0x04);
+      if (val != charge_overcurrent_protection_recovery_time) {  // Предполагаю, что recovery_time - int
+        writeRegister(0x48, (uint32_t)val, 0x04);
+        charge_overcurrent_protection_recovery_time = val;
+      }
     }
-    if (server.hasArg("max_discharge_current") != max_discharge_current) {  // Max Discharge Current (0x49)
+    if (server.hasArg("max_discharge_current")) {
       float val = server.arg("max_discharge_current").toFloat();
-      writeRegister(0x49, (uint32_t)(val * 1000), 0x04);
+      if (abs(val - max_discharge_current) > FLOAT_TOLERANCE) {
+        writeRegister(0x49, (uint32_t)(val * 1000), 0x04);
+        max_discharge_current = val;
+      }
     }
-    if (server.hasArg("discharge_oc_delay")) {  // Discharge OC Delay (0x4A) - NOTE: This address is also max_balance_current, check protocol
-      // NOTE: Based on JK protocol, 0x4A is Max Balance Current. Discharge OC Delay is likely next address or different mapping.
-      // Sticking to most likely addresses based on common usage:
-      // Discharge OC Delay (0x4A in some older protocols, using 0x4A for max_balance_current, 0x4B for cell_count)
-      // For now, let's use the addresses derived from the received settings packet indices:
-      // If receivedBytes[66] is discharge_oc_delay, its register should be 0x4A if 4 bytes/register is constant.
-      // Let's use the register mapping that aligns with standard JKBMS writable registers, 0x4A for max_balance_current is more common.
-      // Given the conflicting protocol info in the code, I will use:
-      // Discharge OC Delay: 0x4A is Max Balance, 0x4B is Cell Count, 0x4C is Power Off.
-      // Let's assume the user's BMS is standard and the write addresses are sequential from 0x41.
-      // I will skip writing this one to avoid conflicts unless I can confirm the correct register.
-      // Instead of guessing, I will use a reliable, confirmed address like 0x4B for Max Balance Current if I can't be sure.
-      // Re-check: Index 66 (D.OC Delay) is 0x4A offset (if 0x41 is offset 10). Let's use the next available: 0x4F (unused in current list).
-      // Based on common JKBMS registers, D.OC Delay is usually 0x4F or similar. Skipping for safety unless confirmed.
-      // For now, I will write the confirmed registers. The list above is complete.
-    }
-    if (server.hasArg("discharge_oc_recovery") != discharge_overcurrent_protection_recovery_time) {  // Discharge OC Recovery (Index 70 -> 0x4B offset, which is Cell Count)
-      // Skipping to avoid overwriting cell count (0x4B)
-    }
-    if (server.hasArg("sc_recovery") != short_circuit_protection_recovery_time) {  // SC Recovery (0x4E)
-      int val = server.arg("sc_recovery").toInt();
-      writeRegister(0x4E, (uint32_t)val, 0x04);
-    }
-    //if (server.hasArg("sc_delay")) { // SC Delay (0x5A)
-    //  int val = server.arg("sc_delay").toInt();
-    //  writeRegister(0x5A, (uint32_t)val, 0x04);
-    //}
 
-    // Температурные настройки (Temperature Settings): Регистры 0x50, 0x53-0x59, float * 10
-    if (server.hasArg("charge_ot_prot") != charge_overtemperature_protection) {  // Charge OT Protection (0x50)
+    if (server.hasArg("sc_recovery")) {
+      int val = server.arg("sc_recovery").toInt();
+      if (val != short_circuit_protection_recovery_time) {
+        writeRegister(0x4E, (uint32_t)val, 0x04);
+        short_circuit_protection_recovery_time = val;
+      }
+    }
+
+    // Температурные настройки (Temperature Settings): float * 10
+    if (server.hasArg("charge_ot_prot")) {
       float val = server.arg("charge_ot_prot").toFloat();
-      writeRegister(0x50, (uint32_t)(val * 10), 0x04);
+      if (abs(val - charge_overtemperature_protection) > FLOAT_TOLERANCE) {
+        writeRegister(0x50, (uint32_t)(val * 10), 0x04);
+        charge_overtemperature_protection = val;
+      }
     }
-    if (server.hasArg("charge_ot_rec") != charge_overtemperature_protection_recovery) {  // Charge OT Recovery (0x53)
+    if (server.hasArg("charge_ot_rec")) {
       float val = server.arg("charge_ot_rec").toFloat();
-      writeRegister(0x53, (uint32_t)(val * 10), 0x04);
+      if (abs(val - charge_overtemperature_protection_recovery) > FLOAT_TOLERANCE) {
+        writeRegister(0x53, (uint32_t)(val * 10), 0x04);
+        charge_overtemperature_protection_recovery = val;
+      }
     }
-    if (server.hasArg("discharge_ot_prot") != discharge_overtemperature_protection) {  // Discharge OT Protection (0x54)
+    if (server.hasArg("discharge_ot_prot")) {
       float val = server.arg("discharge_ot_prot").toFloat();
-      writeRegister(0x54, (uint32_t)(val * 10), 0x04);
+      if (abs(val - discharge_overtemperature_protection) > FLOAT_TOLERANCE) {
+        writeRegister(0x54, (uint32_t)(val * 10), 0x04);
+        discharge_overtemperature_protection = val;
+      }
     }
-    if (server.hasArg("discharge_ot_rec") != discharge_overtemperature_protection_recovery) {  // Discharge OT Recovery (0x55)
+    if (server.hasArg("discharge_ot_rec")) {
       float val = server.arg("discharge_ot_rec").toFloat();
-      writeRegister(0x55, (uint32_t)(val * 10), 0x04);
+      if (abs(val - discharge_overtemperature_protection_recovery) > FLOAT_TOLERANCE) {
+        writeRegister(0x55, (uint32_t)(val * 10), 0x04);
+        discharge_overtemperature_protection_recovery = val;
+      }
     }
-    if (server.hasArg("charge_ut_prot") != charge_undertemperature_protection) {  // Charge UT Protection (0x56)
+    if (server.hasArg("charge_ut_prot")) {
       float val = server.arg("charge_ut_prot").toFloat();
-      writeRegister(0x56, (uint32_t)(val * 10), 0x04);
+      if (abs(val - charge_undertemperature_protection) > FLOAT_TOLERANCE) {
+        writeRegister(0x56, (uint32_t)(val * 10), 0x04);
+        charge_undertemperature_protection = val;
+      }
     }
-    if (server.hasArg("charge_ut_rec") != charge_undertemperature_protection_recovery) {  // Charge UT Recovery (0x57)
+    if (server.hasArg("charge_ut_rec")) {
       float val = server.arg("charge_ut_rec").toFloat();
-      writeRegister(0x57, (uint32_t)(val * 10), 0x04);
+      if (abs(val - charge_undertemperature_protection_recovery) > FLOAT_TOLERANCE) {
+        writeRegister(0x57, (uint32_t)(val * 10), 0x04);
+        charge_undertemperature_protection_recovery = val;
+      }
     }
-    if (server.hasArg("power_tube_ot_prot") != power_tube_overtemperature_protection) {  // Power Tube OT Protection (0x58)
+    if (server.hasArg("power_tube_ot_prot")) {
       float val = server.arg("power_tube_ot_prot").toFloat();
-      writeRegister(0x58, (uint32_t)(val * 10), 0x04);
+      if (abs(val - power_tube_overtemperature_protection) > FLOAT_TOLERANCE) {
+        writeRegister(0x58, (uint32_t)(val * 10), 0x04);
+        power_tube_overtemperature_protection = val;
+      }
     }
-    if (server.hasArg("power_tube_ot_rec") != power_tube_overtemperature_protection_recovery) {  // Power Tube OT Recovery (0x59)
+    if (server.hasArg("power_tube_ot_rec")) {
       float val = server.arg("power_tube_ot_rec").toFloat();
-      writeRegister(0x59, (uint32_t)(val * 10), 0x04);
+      if (abs(val - power_tube_overtemperature_protection_recovery) > FLOAT_TOLERANCE) {
+        writeRegister(0x59, (uint32_t)(val * 10), 0x04);
+        power_tube_overtemperature_protection_recovery = val;
+      }
     }
   }
 
@@ -972,7 +1030,124 @@ void handleSettingsUpdate() {
   server.send(302, "text/plain; charset=UTF-8", "Settings Updated. Redirecting...");
 };
 
-// ----------------------------------------------------------------------------------
+void handleConnect() {
+  if (server.hasArg("mac")) {
+    std::string macAddress = server.arg("mac").c_str();
+
+    if (foundDevices.count(macAddress)) {
+      // Освобождаем старую память, если pBmsDevice уже был установлен (должен быть очищен в onDisconnect)
+      if (pBmsDevice != nullptr) {
+        // ВАЖНО: Не удаляем, так как это память из foundDevices
+      }
+      // Устанавливаем выбранное устройство (используем хранящийся указатель)
+      pBmsDevice = foundDevices[macAddress].pAdvertisedDevice;
+      deviceFound = true;  // Триггер для loop()
+      Serial.printf("Вибрано пристрій для підключення: %s\n", macAddress.c_str());
+    } else {
+      Serial.printf("Помилка: Невідома MAC-адреса: %s\n", macAddress.c_str());
+    }
+
+    // 2. ОЧИЩЕННЯ СТАРОГО КЛІЄНТА (якщо він існував)
+    if (pClient != nullptr) {
+      // Розриваємо будь-яке старе з'єднання
+      if (pClient->isConnected()) {
+        pClient->disconnect();
+      }
+      // Звільняємо пам'ять попереднього клієнта
+      delete pClient;
+      pClient = nullptr;
+    }
+
+    // 3. СТВОРЕННЯ НОВОГО КЛІЄНТА (ПРИЗНАЧЕННЯ ГЛОБАЛЬНІЙ ЗМІННІ)
+    pClient = BLEDevice::createClient();
+
+    if (pClient == nullptr) {
+      server.send(500, "text/plain; charset=UTF-8", "Помилка: Не вдалося створити BLE-клієнта.");
+      return;
+    }
+
+    Serial.printf("Підключення до %s...\n", macAddress.c_str());
+
+    if (!pClient->connect(pBmsDevice)) {
+      Serial.println("Не вдалося підключитися.");
+      // Не удаляем pClientBMS, так как его нужно корректно очистить
+      server.send(503, "text/plain; charset=UTF-8", "Помилка: Не вдалося підключитися до пристрою.");
+      return;
+    };
+
+    pClient->setClientCallbacks(new MyClientCallback());
+
+    // 3. ОБНАРУЖЕНИЕ СЕРВИСОВ И ХАРАКТЕРИСТИК
+    BLERemoteService* pRemoteService = pClient->getService(serviceUUID);
+    if (pRemoteService == nullptr) {
+      Serial.println("Сервіс не знайдено.");
+      pClient->disconnect();
+      server.send(503, "text/plain; charset=UTF-8", "Помилка: Сервіс BMS не знайдено.");
+      return;
+    };
+
+    pWriteCharacteristic = pRemoteService->getCharacteristic(charWriteUUID);
+    if (pWriteCharacteristic == nullptr) {
+      Serial.println("Характеристику запису не знайдено.");
+      pClient->disconnect();
+      server.send(503, "text/plain; charset=UTF-8", "Помилка: Характеристику запису не знайдено.");
+      return;
+    };
+
+    // Получаем характеристику для уведомлений
+    pNotifyCharacteristic = pRemoteService->getCharacteristic(charNotifyUUID);
+    if (pNotifyCharacteristic == nullptr) {
+      pClient->disconnect();
+      Serial.println("Характеристику сповіщень не знайдено.");
+      server.send(503, "text/plain; charset=UTF-8", "Помилка: Характеристику сповіщень не знайдено.");
+      return;
+    };
+
+    if (pNotifyCharacteristic->canNotify()) {
+      pNotifyCharacteristic->registerForNotify(notifyCallback);
+      BLERemoteDescriptor* pCCCD = pNotifyCharacteristic->getDescriptor(BLEUUID(CCCD_UUID));
+
+      if (pCCCD != nullptr) {
+        uint8_t notifyOn[] = { 0x1, 0x0 };
+        pCCCD->writeValue(notifyOn, 2, true);
+        
+
+        // Отправка команд (Блокировка. В реальном проекте лучше использовать очередь FreeRTOS)
+        delay(100);
+        writeRegister(0x97, 0x00000000, 0x00);
+        delay(100);
+        writeRegister(0x96, 0x00000000, 0x00);
+        isConnected = true;
+
+      } else {
+        Serial.println("Помилка: CCCD не знайдено.");
+        pClient->disconnect();
+        server.send(503, "text/plain; charset=UTF-8", "Помилка: Не вдалося налаштувати сповіщення (CCCD).");
+        return;
+      };
+    } else {
+      Serial.println("Помилка: Пристрій не підтримує сповіщення.");
+      pClient->disconnect();
+      server.send(503, "text/plain; charset=UTF-8", "Помилка: Пристрій не підтримує сповіщення.");
+      return;
+    };
+
+    // 5. УСПЕШНОЕ ЗАВЕРШЕНИЕ
+    if (isConnected) {
+      Serial.println("Успішно підключено та налаштовано!");
+      // Перенаправляем на главную страницу, чтобы увидеть данные
+      server.sendHeader("Location", "/");
+      server.send(302, "text/plain; charset=UTF-8", "Перенаправлення на головну сторінку...");
+    } else {
+      // Дополнительная проверка на случай, если логика завершится здесь
+      server.send(500, "text/plain; charset=UTF-8", "Невідома помилка підключення.");
+    }
+    delay(500);
+    server.sendHeader("Location", "/");
+    server.send(302, "text/plain; charset=UTF-8", "Redirecting...");
+  };
+};
+
 void init_wifi() {
   Serial.printf("Подключение к WiFi %s ", ssid);
   WiFi.begin(ssid, password);
@@ -992,25 +1167,26 @@ void init_wifi() {
 
 void webServerTask(void* parameter) {
   // Инициализация WebServer (должна быть внутри задачи)
-  // --- ОБНОВЛЕННЫЕ ОБРАБОТЧИКИ ---
   server.on("/", handleRoot);
   // Обновление настроек BMS (НОВЫЙ ОБРАБОТЧИК)
   server.on("/settings_update", HTTP_POST, handleSettingsUpdate);
 
   server.on("/balance_on", handleBalanceOn);
   server.on("/balance_off", handleBalanceOff);
-
   server.on("/charge_on", handleChargeOn);
   server.on("/charge_off", handleChargeOff);
-
   server.on("/discharge_on", handleDischargeOn);
   server.on("/discharge_off", handleDischargeOff);
-
-  server.on("/scan", HTTP_GET, handleSelectDevice);  // Новый: Страница сканирования и выбора
-  server.on("/connect", HTTP_GET, handleConnect);    // Новый: Обработчик подключения
-
+  server.on("/connect", HTTP_GET, handleConnect);
   server.on("/update", HTTP_GET, handleUpdate);
   server.on("/update", HTTP_POST, handleUpdateUpload);
+
+  // Встановлюємо обробник для запуску сканування
+  server.on("/scan", HTTP_GET, handleScan);
+  // Встановлюємо обробник для відображення результатів
+  server.on("/select_device", HTTP_GET, handleSelectDevice);
+  // Встановлюємо обробник для запуску сканування
+  server.on("/disconnect", HTTP_GET, handleDisconnect);
 
   server.begin();
   Serial.println("Веб-сервер запущен.");
@@ -1026,68 +1202,36 @@ void webServerTask(void* parameter) {
   };
 };
 
-  void setup() {
-    Serial.begin(115200);
+void setup() {
+  Serial.begin(115200);
 
+  init_wifi();
+
+  // 2. Создание и привязка задачи для Веб-сервера
+  xTaskCreatePinnedToCore(
+    webServerTask,
+    "WebServer",
+    10000,
+    NULL,
+    10,
+    NULL,
+    0);
+
+
+  BLEDevice::init("ESP32_JK_Client");
+  pBLEScan = BLEDevice::getScan();
+  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+  pBLEScan->setActiveScan(true);
+  pBLEScan->setInterval(100);
+  pBLEScan->setWindow(99);
+};
+
+
+
+void loop() {
+
+  if (WiFi.status() != WL_CONNECTED) {
     init_wifi();
-
-    // 2. Создание и привязка задачи для Веб-сервера
-    xTaskCreatePinnedToCore(
-      webServerTask,  // Функция, которую нужно запустить
-      "WebServer",    // Имя задачи
-      10000,          // Размер стека (10K - достаточно для WebServer)
-      NULL,           // Параметр (не используем)
-      5,              // Приоритет (можно поднять до 5-10 для лучшей отзывчивости)
-      NULL,           // Указатель на задачу
-      1               // ЯДРО: Core 1 (Core 0 часто используется для задач ядра FreeRTOS)
-    );
-
-
-
-
-    BLEDevice::init("ESP32_JK_Client");
-
-    pBLEScan = BLEDevice::getScan();
-    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-    pBLEScan->setActiveScan(true);
-    pBLEScan->setInterval(100);
-    pBLEScan->setWindow(99);
   };
-
-
-
-  void loop() {
-    if (WiFi.status() != WL_CONNECTED) {
-      init_wifi();
-    };
-    delay(1000);
-    if (deviceFound && !isConnected) {
-      connectToBMS();
-    }
-    // Если не найдено (или соединение потеряно) и нет выбранного устройства
-    else if (!deviceFound && !isConnected) {
-
-      // Очищаем предыдущие результаты сканирования перед новым стартом
-      for (auto& pair : foundDevices) {
-        delete pair.second.pAdvertisedDevice;
-      }
-      foundDevices.clear();
-
-      Serial.println("Починаємо сканування...");
-      // Сканируем 5 секунд (или пока не найдем)
-      pBLEScan->start(5, false);
-      Serial.printf("Сканування завершено. Знайдено пристроїв: %d\n", foundDevices.size());
-
-      // Если найдено только ОДНО устройство, сразу устанавливаем его для подключения
-      if (foundDevices.size() == 1) {
-        // Так как map содержит только 1 элемент, берем его
-        pBmsDevice = foundDevices.begin()->second.pAdvertisedDevice;
-        deviceFound = true;
-        Serial.println("Знайдено 1 пристрій, спроба автоматичного підключення.");
-      }
-      // Если 0 или >1, то deviceFound остается false. Пользователь должен перейти на /scan
-      // для повторного сканирования или выбора.
-    } else if (deviceFound && isConnected) {
-      delay(5000);
-    };
-  };
+  delay(1000);
+};
