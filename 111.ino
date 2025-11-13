@@ -15,14 +15,14 @@
 #include <vector>
 #include <map>
 #include <string>
-#include <cmath>     // Для abs() в порівнянні float
+#include <cmath>  // Для abs() в порівнянні float
 
 // -----------------------------------------------------------------------------
 // --- 2. WIFI & WEB SERVER CONFIGURATION --------------------------------------
 // -----------------------------------------------------------------------------
 
-const char* ssid = "homewifi";                // <-- ЗАМЕНІТЬ на ваш SSID
-const char* password = "homewifi1234567890";  // <-- ЗАМЕНІТЬ на ваш пароль
+const char* ssid = "fullrezerv";                // <-- ЗАМЕНІТЬ на ваш SSID
+const char* password = "1234567890";  // <-- ЗАМЕНІТЬ на ваш пароль
 
 WebServer server(80);
 
@@ -30,11 +30,11 @@ WebServer server(80);
 // --- 3. BLE UUIDS & CONSTANTS ------------------------------------------------
 // -----------------------------------------------------------------------------
 
-static BLEUUID serviceUUID("0000ffe0-0000-1000-8000-00805f9b34fb");        // Основний сервіс
-static BLEUUID charWriteUUID("0000ffe1-0000-1000-8000-00805f9b34fb");      // Характеристика для ЗАПИСУ
-static BLEUUID charNotifyUUID("0000ffe1-0000-1000-8000-00805f9b34fb");     // Характеристика для СПОВІЩЕНЬ
+static BLEUUID serviceUUID("0000ffe0-0000-1000-8000-00805f9b34fb");     // Основний сервіс
+static BLEUUID charWriteUUID("0000ffe1-0000-1000-8000-00805f9b34fb");   // Характеристика для ЗАПИСУ
+static BLEUUID charNotifyUUID("0000ffe1-0000-1000-8000-00805f9b34fb");  // Характеристика для СПОВІЩЕНЬ
 #define CCCD_UUID ((uint16_t)0x2902)
-#define FLOAT_TOLERANCE 0.001 // Допуск для порівняння float в налаштуваннях
+#define FLOAT_TOLERANCE 0.001  // Допуск для порівняння float в налаштуваннях
 
 // -----------------------------------------------------------------------------
 // --- 4. BLE GLOBAL STATE & DEVICE MANAGEMENT ---------------------------------
@@ -55,8 +55,11 @@ static BLERemoteCharacteristic* pWriteCharacteristic = nullptr;
 static BLERemoteCharacteristic* pNotifyCharacteristic = nullptr;
 static BLEScan* pBLEScan = nullptr;
 
-static bool deviceFound = false;     // true, тільки коли вибраний конкретний прилад
+static bool deviceFound = false;  // true, тільки коли вибраний конкретний прилад
 static bool isConnected = false;
+static bool parsedata = false;
+static bool parsesettings = false;
+static bool parseinfo = false;
 
 // -----------------------------------------------------------------------------
 // --- 5. DATA PROCESSING & FRAME STATE ----------------------------------------
@@ -167,7 +170,7 @@ void writeRegister(uint8_t address, uint32_t value, uint8_t length) {
   uint8_t frame[20] = { 0xAA, 0x55, 0x90, 0xEB, address, length };
 
   // Вставка значення (Little-Endian)
-  frame[6] = value >> 0;   // LSB
+  frame[6] = value >> 0;  // LSB
   frame[7] = value >> 8;
   frame[8] = value >> 16;
   frame[9] = value >> 24;  // MSB
@@ -184,7 +187,8 @@ void writeRegister(uint8_t address, uint32_t value, uint8_t length) {
 // -----------------------------------------------------------------------------
 
 void parseBMSData() {
-  new_data = true;
+  parsedata = true;
+
 
   // Напруги комірок
   for (int j = 0, i = 7; i < 38; j++, i += 2) {
@@ -283,6 +287,8 @@ void parseBMSSettings() {
   G_settings.total_battery_capacity = ((receivedBytes[133] << 24 | receivedBytes[132] << 16 | receivedBytes[131] << 8 | receivedBytes[130]) * 0.001);
   G_settings.short_circuit_protection_delay = ((receivedBytes[137] << 24 | receivedBytes[136] << 16 | receivedBytes[135] << 8 | receivedBytes[134]) * 1);
   G_settings.balance_starting_voltage = ((receivedBytes[141] << 24 | receivedBytes[140] << 16 | receivedBytes[139] << 8 | receivedBytes[138]) * 0.001);
+
+  parsesettings = true;
 }
 
 void parseDeviceInfo() {
@@ -290,7 +296,7 @@ void parseDeviceInfo() {
   if (frame < 134) {
     return;
   }
-  
+
   // Парсинг строкових даних
   G_info.vendorID.assign(receivedBytes + 6, receivedBytes + 6 + 16);
   G_info.hardwareVersion.assign(receivedBytes + 22, receivedBytes + 22 + 8);
@@ -306,6 +312,7 @@ void parseDeviceInfo() {
   // Парсинг uint32_t (Little-Endian)
   G_info.uptime = (receivedBytes[41] << 24) | (receivedBytes[40] << 16) | (receivedBytes[39] << 8) | receivedBytes[38];
   G_info.powerOnCount = (receivedBytes[45] << 24) | (receivedBytes[44] << 16) | (receivedBytes[43] << 8) | receivedBytes[42];
+  parseinfo = true;
 }
 
 // Функція для парсингу (розбору) даних, отримуваних по частинах
@@ -331,19 +338,18 @@ void processBMSFrame(uint8_t* pData, size_t length) {
 
         // Визначаємо тип кадру даних за receivedBytes[4]
         switch (receivedBytes[4]) {
-          case 0x01: // Налаштування
+          case 0x01:  // Налаштування
             parseBMSSettings();
             break;
-          case 0x02: // Дані телеметрії
+          case 0x02:  // Дані телеметрії
             parseBMSData();
             break;
-          case 0x03: // Інформація про пристрій
+          case 0x03:  // Інформація про пристрій
             parseDeviceInfo();
             break;
           default:
             break;
         }
-
         break;  // Виходимо з циклу після обробки повного кадру
       }
     }
@@ -376,7 +382,7 @@ class MyClientCallback : public BLEClientCallbacks {
   void onDisconnect(BLEClient* pClient) {
     isConnected = false;
     deviceFound = false;
-    pBmsDevice = nullptr; // Скидаємо вибраний пристрій
+    pBmsDevice = nullptr;  // Скидаємо вибраний пристрій
     Serial.println("Disconnected from BMS.");
   }
 };
@@ -475,13 +481,13 @@ bool connectToServer(BLEAddress address) {
   }
 
   // Відправка команд на отримання даних і налаштувань (запит регістрів 0x97, 0x96, 0x95)
-  delay(100);
-  writeRegister(0x97, 0x00000000, 0x00); // Запит інфо про пристрій
-  delay(100);
-  writeRegister(0x96, 0x00000000, 0x00); // Запит налаштувань
-  delay(100);
-  writeRegister(0x95, 0x00000000, 0x00); // Запит даних
-
+  delay(500);
+  writeRegister(0x97, 0x00000000, 0x00);  // Запит інфо про пристрій
+  delay(500);
+  writeRegister(0x96, 0x00000000, 0x00);  // Запит налаштувань
+  delay(500);
+  writeRegister(0x95, 0x00000000, 0x00);  // Запит даних
+  delay(1000);
   Serial.println("Успішно підключено та ініціалізовано.");
   return true;
 }
@@ -504,9 +510,10 @@ void handleRoot() {
   html += "th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }";
   html += "th { background-color: #007bff; color: white; }";
   html += "tr:nth-child(even) { background-color: #f2f2f2; }";
-  html += ".scan-button, .ota-button, .control-button, .disconnect-button { display: inline-block; padding: 10px 15px; margin-top: 10px; border-radius: 5px; text-decoration: none; color: white; font-weight: bold; text-align: center; }";
+  html += ".scan-button, .ota-button, .control-button, .disconnect-button, .settings-button { display: inline-block; padding: 10px 15px; margin-top: 10px; border-radius: 5px; text-decoration: none; color: white; font-weight: bold; text-align: center; }";
   html += ".scan-button { background-color: #28a745; margin-bottom: 20px; }";
-  html += ".ota-button { background-color: #ffc107; margin-bottom: 20px; }";
+  html += ".ota-button { background-color: #ffc107; margin-bottom: 20px; margin-right: 10px; }";
+  html += ".settings-button { background-color: #007bff; margin-bottom: 20px; margin-left: 10px; }"; // НОВА КНОПКА
   html += ".disconnect-button { background-color: #dc3545; margin-left: 10px; }";
   html += ".control-button { padding: 5px 10px; font-size: 0.9em; margin: 2px; }";
   html += ".toggle-on { background-color: #28a745; }";
@@ -514,6 +521,8 @@ void handleRoot() {
   html += ".status-connected { color: green; font-weight: bold; }";
   html += ".status-disconnected { color: red; font-weight: bold; }";
   html += ".cell-table td { font-size: 0.9em; }";
+  html += ".group-header th { background-color: #4CAF50; }"; // Додано стиль для заголовків груп налаштувань
+  html += ".save-button { display: block; width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1.1em; margin-top: 20px; }";
   html += "</style></head><body><div class='container'>";
   html += "<h1>⚡️ Дані Jikong BMS (ESP32)</h1>";
 
@@ -523,121 +532,207 @@ void handleRoot() {
     html += "<a href='/scan' class='scan-button'>▶️ СКАНУВАТИ ТА ВИБРАТИ BMS</a>";
     html += "</div></body></html>";
     server.send(200, "text/html; charset=UTF-8", html);
-    return; // Виходимо, не показуючи решту контенту
+    return;  // Виходимо, не показуючи решту контенту
   } else {
     String connectionStatus = isConnected ? "<span class='status-connected'>ПІДКЛЮЧЕНО</span>" : "<span class='status-disconnected'>ВІДКЛЮЧЕНО</span>";
     html += "<p style='text-align: center;' ><em>IP-адреса: <strong>" + WiFi.localIP().toString() + "</strong> | Статус BMS: " + connectionStatus + "</em></p>";
-    html += "<p style='text-align: center;' ><em><a href='/disconnect' class='disconnect-button'>❌ ВІДКЛЮЧИТИСЯ</a>";
-  }
+    html += "<p style='text-align: center;' >"; // Початок блоку кнопок
 
-  // --- Кнопка OTA ---
-  html += "<a href='/update' class='ota-button'>(OTA)</a></em></p>";
+    // --- Кнопка OTA ---
+    html += "<a href='/update' class='ota-button'>(OTA)</a>";
+    
+    // --- Кнопка НАЛАШТУВАННЯ ---
+    html += "<a href='/settings' class='settings-button'>⚙️ НАЛАШТУВАННЯ BMS</a>"; // НОВЕ ПОСИЛАННЯ
+
+    // --- Кнопка ВІДКЛЮЧИТИСЯ ---
+    html += "<a href='/disconnect' class='disconnect-button'>❌ ВІДКЛЮЧИТИСЯ</a></em></p>";
+  }
 
   // --- Загальні дані ---
   html += "<h2>📊 Загальні дані</h2>";
   html += "<table>";
   html += "<tr><th>Параметр</th><th>Значення</th><th>Од. виміру</th></tr>";
 
-  // *** ЗБЕРЕЖЕНО ОРИГІНАЛЬНИЙ СПОСІБ ПЕРЕТВОРЕННЯ В СТРОКУ ***
-  html += "<tr><td>Напруга батареї</td><td>" + String(G_data.Battery_Voltage, 2) + "</td><td>V</td></tr>";
-  html += "<tr><td>Струм заряду/розряду</td><td>" + String(G_data.Charge_Current, 2) + "</td><td>A</td></tr>";
-  html += "<tr><td>Потужність</td><td>" + String(G_data.Battery_Power, 2) + "</td><td>W</td></tr>";
-  html += "<tr><td>Залишок заряду (SOC)</td><td>" + String(G_data.Percent_Remain) + "</td><td>%</td></tr>";
-  html += "<tr><td>Залишкова ємність</td><td>" + String(G_data.Capacity_Remain, 3) + "</td><td>Ah</td></tr>";
-  html += "<tr><td>Номінальна ємність</td><td>" + String(G_data.Nominal_Capacity, 3) + "</td><td>Ah</td></tr>";
-  html += "<tr><td>Середня напруга комірки</td><td>" + String(G_data.Average_Cell_Voltage, 3) + "</td><td>V</td></tr>";
-  html += "<tr><td>Дельта напруг комірок</td><td>" + String(G_data.Delta_Cell_Voltage, 3) + "</td><td>V</td></tr>";
-  html += "<tr><td>Температура MOS</td><td>" + String(G_data.MOS_Temp, 1) + "</td><td>°C</td></tr>";
-  html += "<tr><td>Температура T1</td><td>" + String(G_data.Battery_T1, 1) + "</td><td>°C</td></tr>";
-  html += "<tr><td>Температура T2</td><td>" + String(G_data.Battery_T2, 1) + "</td><td>°C</td></tr>";
-  html += "<tr><td>Час роботи</td><td>" + String(G_data.days) + "d " + String(G_data.hr) + "h " + String(G_data.mi) + "m " + String(G_data.sec) + "s</td><td></td></tr>";
-  html += "<tr><td>Цикли/Ємність циклу</td><td>" + String(G_data.Cycle_Count) + " / " + String(G_data.Cycle_Capacity, 3) + " Ah</td><td></td></tr>";
-  // --- КЕРУВАННЯ ЗАРЯДОМ ---
-  html += "<tr><td>Дозволено заряд</td><td>" + String(G_data.Charge ? "🟢 УВІМК" : "🔴 ВИМК") + "</td><td>";
-  if (G_data.Charge) {
-    html += "<a href='/charge_off' class='control-button toggle-off off'>ВИМКНУТИ ЗАРЯД</a>";
-  } else {
-    html += "<a href='/charge_on' class='control-button toggle-on'>УВІМКНУТИ ЗАРЯД</a>";
-  }
-  html += "</td></tr>";
-  // --- КЕРУВАННЯ РОЗРЯДОМ ---
-  html += "<tr><td>Дозволено розряд</td><td>" + String(G_data.Discharge ? "🟢 УВІМК" : "🔴 ВИМК") + "</td><td>";
-  if (G_data.Discharge) {
-    html += "<a href='/discharge_off' class='control-button toggle-off off'>ВИМКНУТИ РОЗРЯД</a>";
-  } else {
-    html += "<a href='/discharge_on' class='control-button toggle-on discharge'>УВІМКНУТИ РОЗРЯД</a>";
-  }
-  html += "</td></tr>";
-  // --- КЕРУВАННЯ БАЛАНСУВАННЯМ ---
-  html += "<tr><td>Балансування</td><td>" + String(G_data.Balance ? "🟢 Активне" : "⚪ Неактивне") + "</td><td>";
-  if (G_data.Balance) {
-    html += "<a href='/balance_off' class='control-button toggle-off off'>ВИМКНУТИ БАЛАНС</a>";
-  } else {
-    html += "<a href='/balance_on' class='control-button toggle-on'>УВІМКНУТИ БАЛАНС</a>";
-  }
-  html += "</td></tr>";
-  html += "<tr><td>Струм балансування</td><td>" + String(G_data.Balance_Curr, 3) + " A</td><td></td></tr>";
-  html += "</table>";
-
-  // --- Напруги комірок ---
-  html += "<h2>🔬 Напруги комірок</h2>";
-  html += "<table class='cell-table'>";
-  html += "<tr><th>Комірка</th><th>Напруга (V)</th><th>Опір (Ом)</th></tr>";
-  for (int j = 0; j < G_data.cell_count; j++) {
-    if (G_data.cellVoltage[j] > 0.1) {
-      html += "<tr><td>" + String(j + 1) + "</td><td>" + String(G_data.cellVoltage[j], 3) + "</td><td>" + String(G_data.wireResist[j], 3) + "</td></tr>";
+  if (parsedata) {
+    // *** ЗБЕРЕЖЕНО ОРИГІНАЛЬНИЙ СПОСІБ ПЕРЕТВОРЕННЯ В СТРОКУ ***
+    html += "<tr><td>Напруга батареї</td><td>" + String(G_data.Battery_Voltage, 2) + "</td><td>V</td></tr>";
+    html += "<tr><td>Кількість комірок</td><td>" + String(G_data.cell_count, 2) + "</td><td>Шт</td></tr>";
+    html += "<tr><td>Струм заряду/розряду</td><td>" + String(G_data.Charge_Current, 2) + "</td><td>A</td></tr>";
+    html += "<tr><td>Потужність</td><td>" + String(G_data.Battery_Power, 2) + "</td><td>W</td></tr>";
+    html += "<tr><td>Залишок заряду (SOC)</td><td>" + String(G_data.Percent_Remain) + "</td><td>%</td></tr>";
+    html += "<tr><td>Залишкова ємність</td><td>" + String(G_data.Capacity_Remain, 3) + "</td><td>Ah</td></tr>";
+    html += "<tr><td>Номінальна ємність</td><td>" + String(G_data.Nominal_Capacity, 3) + "</td><td>Ah</td></tr>";
+    html += "<tr><td>Середня напруга комірки</td><td>" + String(G_data.Average_Cell_Voltage, 3) + "</td><td>V</td></tr>";
+    html += "<tr><td>Дельта напруг комірок</td><td>" + String(G_data.Delta_Cell_Voltage, 3) + "</td><td>V</td></tr>";
+    html += "<tr><td>Температура MOS</td><td>" + String(G_data.MOS_Temp, 1) + "</td><td>°C</td></tr>";
+    html += "<tr><td>Температура T1</td><td>" + String(G_data.Battery_T1, 1) + "</td><td>°C</td></tr>";
+    html += "<tr><td>Температура T2</td><td>" + String(G_data.Battery_T2, 1) + "</td><td>°C</td></tr>";
+    html += "<tr><td>Час роботи</td><td>" + String(G_data.days) + "d " + String(G_data.hr) + "h " + String(G_data.mi) + "m " + String(G_data.sec) + "s</td><td></td></tr>";
+    html += "<tr><td>Цикли/Ємність циклу</td><td>" + String(G_data.Cycle_Count) + " / " + String(G_data.Cycle_Capacity, 3) + " Ah</td><td></td></tr>";
+    // --- КЕРУВАННЯ ЗАРЯДОМ ---
+    html += "<tr><td>Дозволено заряд</td><td>" + String(G_data.Charge ? "🟢 УВІМК" : "🔴 ВИМК") + "</td><td>";
+    if (G_data.Charge) {
+      html += "<a href='/charge_off' class='control-button toggle-off off'>ВИМКНУТИ ЗАРЯД</a>";
+    } else {
+      html += "<a href='/charge_on' class='control-button toggle-on'>УВІМКНУТИ ЗАРЯД</a>";
     }
-  }
-  // Fallback для комірок, якщо count = 0
-  if (G_data.cell_count == 0) {
-    for (int j = 0; j < 16; j++) {
+    html += "</td></tr>";
+    // --- КЕРУВАННЯ РОЗРЯДОМ ---
+    html += "<tr><td>Дозволено розряд</td><td>" + String(G_data.Discharge ? "🟢 УВІМК" : "🔴 ВИМК") + "</td><td>";
+    if (G_data.Discharge) {
+      html += "<a href='/discharge_off' class='control-button toggle-off off'>ВИМКНУТИ РОЗРЯД</a>";
+    } else {
+      html += "<a href='/discharge_on' class='control-button toggle-on discharge'>УВІМКНУТИ РОЗРЯД</a>";
+    }
+    html += "</td></tr>";
+    // --- КЕРУВАННЯ БАЛАНСУВАННЯМ ---
+    html += "<tr><td>Балансування</td><td>" + String(G_data.Balance ? "🟢 Активне" : "⚪ Неактивне") + "</td><td>";
+    if (G_data.Balance) {
+      html += "<a href='/balance_off' class='control-button toggle-off off'>ВИМКНУТИ БАЛАНС</a>";
+    } else {
+      html += "<a href='/balance_on' class='control-button toggle-on'>УВІМКНУТИ БАЛАНС</a>";
+    }
+    html += "</td></tr>";
+    html += "<tr><td>Струм балансування</td><td>" + String(G_data.Balance_Curr, 3) + " A</td><td></td></tr>";
+    html += "</table>";
+
+    // --- Напруги комірок ---
+    html += "<h2>🔬 Напруги комірок</h2>";
+    html += "<table class='cell-table'>";
+    html += "<tr><th>Комірка</th><th>Напруга (V)</th><th>Опір (Ом)</th></tr>";
+    for (int j = 0; j < G_data.cell_count; j++) {
       if (G_data.cellVoltage[j] > 0.1) {
         html += "<tr><td>" + String(j + 1) + "</td><td>" + String(G_data.cellVoltage[j], 3) + "</td><td>" + String(G_data.wireResist[j], 3) + "</td></tr>";
       }
     }
+    // Fallback для комірок, якщо count = 0
+    if (G_data.cell_count == 0) {
+      for (int j = 0; j < 16; j++) {
+        if (G_data.cellVoltage[j] > 0.1) {
+          html += "<tr><td>" + String(j + 1) + "</td><td>" + String(G_data.cellVoltage[j], 3) + "</td><td>" + String(G_data.wireResist[j], 3) + "</td></tr>";
+        }
+      }
+    }
+    html += "</table>";
   }
-  html += "</table>";
+  if (parseinfo) {
+    // --- Інфо про пристрій ---
+    html += "<h2>⚙️ Інформація про Пристрій BMS</h2>";
+    html += "<table>";
+    html += "<tr><th>Параметр</th><th>Значення</th></tr>";
+    html += "<tr><td>Ім'я пристрою</td><td>" + String(G_info.deviceName.c_str()) + "</td></tr>";
+    html += "<tr><td>Серійний номер</td><td>" + String(G_info.serialNumber.c_str()) + "</td></tr>";
+    html += "<tr><td>Версія HW/SW</td><td>" + String(G_info.hardwareVersion.c_str()) + " / " + String(G_info.softwareVersion.c_str()) + "</td></tr>";
+    html += "<tr><td>Vendor ID</td><td>" + String(G_info.vendorID.c_str()) + "</td></tr>";
+    html += "<tr><td>Дата виготовлення</td><td>" + String(G_info.manufacturingDate.c_str()) + "</td></tr>";
+    html += "<tr><td>Кількість увімкнень</td><td>" + String(G_info.powerOnCount) + "</td></tr>";
+    html += "</table>";
+  }
 
-  // --- Інфо про пристрій ---
-  html += "<h2>⚙️ Інформація про Пристрій BMS</h2>";
-  html += "<table>";
-  html += "<tr><th>Параметр</th><th>Значення</th></tr>";
-  html += "<tr><td>Ім'я пристрою</td><td>" + String(G_info.deviceName.c_str()) + "</td></tr>";
-  html += "<tr><td>Серійний номер</td><td>" + String(G_info.serialNumber.c_str()) + "</td></tr>";
-  html += "<tr><td>Версія HW/SW</td><td>" + String(G_info.hardwareVersion.c_str()) + " / " + String(G_info.softwareVersion.c_str()) + "</td></tr>";
-  html += "<tr><td>Vendor ID</td><td>" + String(G_info.vendorID.c_str()) + "</td></tr>";
-  html += "<tr><td>Дата виготовлення</td><td>" + String(G_info.manufacturingDate.c_str()) + "</td></tr>";
-  html += "<tr><td>Час роботи (вкл)</td><td>" + String(G_info.uptime) + " сек</td></tr>";
-  html += "<tr><td>Кількість увімкнень</td><td>" + String(G_info.powerOnCount) + "</td></tr>";
-  html += "</table>";
-
-  // --- Налаштування ---
-  html += "<h2>⚙️ Налаштування BMS / Редагування</h2>";
-  html += "<form action='/settings_update' method='post'>";
-  html += "<table>";
-  html += "<tr><th>Параметр</th><th>Поточне значення</th><th>Нове значення</th><th>Од. виміру</th></tr>";
-  
-  // Приклад поля для редагування (Загальна ємність)
-  html += "<tr><td>Загальна ємність батареї</td><td>" + String(G_settings.total_battery_capacity, 3) + "</td>";
-  html += "<td><input type='number' step='0.001' name='total_battery_capacity' value='" + String(G_settings.total_battery_capacity, 3) + "'></td><td>Ah</td></tr>";
-  
-  // Додайте інші поля налаштувань за потреби:
-  html += "<tr><td>UVP Напруга комірки (V)</td><td>" + String(G_settings.cell_voltage_undervoltage_protection, 3) + "</td>";
-  html += "<td><input type='number' step='0.001' name='cell_voltage_undervoltage_protection' value='" + String(G_settings.cell_voltage_undervoltage_protection, 3) + "'></td><td>V</td></tr>";
-
-  html += "</table>";
-  html += "<input type='submit' value='Зберегти Налаштування' class='scan-button'>";
-  html += "</form>";
-  
   html += "</div></body></html>";
   server.sendHeader("Connection", "close");
   server.send(200, "text/html; charset=UTF-8", html);
 }
 
+// Припускаємо, що всі змінні (G_settings, isConnected, server, parseSettings) доступні глобально або через параметри
+
+void handleSettings() {
+  // Перевірка, чи підключено до BMS
+  if (!isConnected) {
+    server.sendHeader("Location", "/");
+    server.send(302, "text/plain", "Redirecting to root...");
+    return;
+  }
+
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  html += "<title>Налаштування Jikong BMS</title>";
+  html += "<style>";
+  // Стилі, скопійовані з оригінальної функції handleRoot для узгодженості
+  html += "body { font-family: Arial, sans-serif; background-color: #f4f4f9; color: #333; margin: 0; padding: 0; }";
+  html += ".container { max-width: 800px; margin: 20px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }";
+  html += "h1 { color: #007bff; text-align: center; }";
+  html += "h2 { border-bottom: 2px solid #ccc; padding-bottom: 5px; margin-top: 20px; color: #555; }";
+  html += "table { width: 100%; border-collapse: collapse; margin-top: 10px; }";
+  html += "th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }";
+  html += "th { background-color: #007bff; color: white; }";
+  html += "tr:nth-child(even) { background-color: #f2f2f2; }";
+  html += ".group-header th { background-color: #4CAF50; }"; // Заголовки груп
+  html += "input[type='number'] { width: 90%; padding: 5px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }";
+  html += ".save-button { display: block; width: 100%; padding: 15px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1.2em; margin-top: 20px; }";
+  html += ".back-button { display: inline-block; padding: 8px 15px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 5px; margin-bottom: 15px; }";
+  html += "</style></head><body><div class='container'>";
+  html += "<h1>⚙️ Налаштування Jikong BMS</h1>";
+  html += "<a href='/' class='back-button'>⬅️ На головну</a>"; // Кнопка назад
+
+  // --- Налаштування BMS (скопійовано з оригінальної функції) ---
+  html += "<h2>⚙️ Параметри BMS</h2>";
+  html += "<form method='POST' action='/settings_update' class='settings-form'>";
+  html += "<table>";
+  html += "<tr><th>Параметр</th><th>Поточне значення</th><th>Нове значення</th></tr>";
+
+  // --- Напруги комірок ---
+  html += "<tr class='group-header'><th colspan='3'>Напруги комірок (V)</th></tr>";
+  // cell_voltage_overvoltage_protection (0x0C)
+  html += "<tr><td>Захист від перенапруги (ОВР)</td><td>" + String(G_settings.cell_voltage_overvoltage_protection, 3) + "</td><td><input type='number' name='cell_voltage_overvoltage_protection' value='" + String(G_settings.cell_voltage_overvoltage_protection, 3) + "' step='0.001' min='0' max='5' required></td></tr>";
+  // cell_voltage_overvoltage_recovery (0x0D)
+  html += "<tr><td>Відновлення ОВР</td><td>" + String(G_settings.cell_voltage_overvoltage_recovery, 3) + "</td><td><input type='number' name='cell_voltage_overvoltage_recovery' value='" + String(G_settings.cell_voltage_overvoltage_recovery, 3) + "' step='0.001' min='0' max='5' required></td></tr>";
+  // cell_voltage_undervoltage_protection (0x0A)
+  html += "<tr><td>Захист від низької напруги (УВР)</td><td>" + String(G_settings.cell_voltage_undervoltage_protection, 3) + "</td><td><input type='number' name='cell_voltage_undervoltage_protection' value='" + String(G_settings.cell_voltage_undervoltage_protection, 3) + "' step='0.001' min='0' max='5' required></td></tr>";
+  // cell_voltage_undervoltage_recovery (0x0B)
+  html += "<tr><td>Відновлення УВР</td><td>" + String(G_settings.cell_voltage_undervoltage_recovery, 3) + "</td><td><input type='number' name='cell_voltage_undervoltage_recovery' value='" + String(G_settings.cell_voltage_undervoltage_recovery, 3) + "' step='0.001' min='0' max='5' required></td></tr>";
+  // power_off_voltage (0x14)
+  html += "<tr><td>Напруга вимкнення</td><td>" + String(G_settings.power_off_voltage, 3) + "</td><td><input type='number' name='power_off_voltage' value='" + String(G_settings.power_off_voltage, 3) + "' step='0.001' min='0' max='5' required></td></tr>";
+
+  // --- Балансування ---
+  html += "<tr class='group-header'><th colspan='3'>Балансування</th></tr>";
+  // balance_trigger_voltage (0x0E)
+  html += "<tr><td>Напруга запуску балансування (V)</td><td>" + String(G_settings.balance_trigger_voltage, 3) + "</td><td><input type='number' name='balance_trigger_voltage' value='" + String(G_settings.balance_trigger_voltage, 3) + "' step='0.001' min='0' max='5' required></td></tr>";
+  // balance_starting_voltage (0x24)
+  html += "<tr><td>Мінімальна напруга запуску (V)</td><td>" + String(G_settings.balance_starting_voltage, 3) + "</td><td><input type='number' name='balance_starting_voltage' value='" + String(G_settings.balance_starting_voltage, 3) + "' step='0.001' min='0' max='5' required></td></tr>";
+  // max_balance_current (0x1C)
+  html += "<tr><td>Макс. струм балансування (A)</td><td>" + String(G_settings.max_balance_current, 3) + "</td><td><input type='number' name='max_balance_current' value='" + String(G_settings.max_balance_current, 3) + "' step='0.001' min='0' max='1' required></td></tr>";
+
+  
+
+
+   // --- Температури ---
+  html += "<tr class='group-header'><th colspan='3'>Температурні Захисти (°C)</th></tr>";
+  // charge_overtemperature_protection (0x1D)
+  html += "<tr><td>Заряд: Перегрів захист</td><td>" + String(G_settings.charge_overtemperature_protection, 1) + "</td><td><input type='number' name='charge_overtemperature_protection' value='" + String(G_settings.charge_overtemperature_protection, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
+  // charge_overtemperature_protection_recovery (0x1E)
+  html += "<tr><td>Заряд: Відновлення перегріву</td><td>" + String(G_settings.charge_overtemperature_protection_recovery, 1) + "</td><td><input type='number' name='charge_overtemperature_protection_recovery' value='" + String(G_settings.charge_overtemperature_protection_recovery, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
+  // discharge_overtemperature_protection (0x1F)
+  html += "<tr><td>Розряд: Перегрів захист</td><td>" + String(G_settings.discharge_overtemperature_protection, 1) + "</td><td><input type='number' name='discharge_overtemperature_protection' value='" + String(G_settings.discharge_overtemperature_protection, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
+  // discharge_overtemperature_protection_recovery (0x20)
+  html += "<tr><td>Розряд: Відновлення перегріву</td><td>" + String(G_settings.discharge_overtemperature_protection_recovery, 1) + "</td><td><input type='number' name='discharge_overtemperature_protection_recovery' value='" + String(G_settings.discharge_overtemperature_protection_recovery, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
+  // charge_undertemperature_protection (0x21)
+  html += "<tr><td>Заряд: Переохолодження захист</td><td>" + String(G_settings.charge_undertemperature_protection, 1) + "</td><td><input type='number' name='charge_undertemperature_protection' value='" + String(G_settings.charge_undertemperature_protection, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
+  // charge_undertemperature_protection_recovery (0x22)
+  html += "<tr><td>Заряд: Відновлення переохолодження</td><td>" + String(G_settings.charge_undertemperature_protection_recovery, 1) + "</td><td><input type='number' name='charge_undertemperature_protection_recovery' value='" + String(G_settings.charge_undertemperature_protection_recovery, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
+  // power_tube_overtemperature_protection (0x25)
+  html += "<tr><td>MOSFET: Перегрів захист</td><td>" + String(G_settings.power_tube_overtemperature_protection, 1) + "</td><td><input type='number' name='power_tube_overtemperature_protection' value='" + String(G_settings.power_tube_overtemperature_protection, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
+  // power_tube_overtemperature_protection_recovery (0x26)
+  html += "<tr><td>MOSFET: Відновлення перегріву</td><td>" + String(G_settings.power_tube_overtemperature_protection_recovery, 1) + "</td><td><input type='number' name='power_tube_overtemperature_protection_recovery' value='" + String(G_settings.power_tube_overtemperature_protection_recovery, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
+
+  // total_battery_capacity (0x4D) - ЄМНІСТЬ
+  html += "<tr class='group-header'><th colspan='3'>Ємність (Ah)</th></tr>";
+  html += "<tr><td>Номінальна ємність (Ah)</td><td>" + String(G_settings.total_battery_capacity, 3) + "</td><td><input type='number' name='total_battery_capacity' value='" + String(G_settings.total_battery_capacity, 3) + "' step='0.001' min='0.001' max='5000' required></td></tr>";
+
+  // --- Кнопка збереження ---
+  html += "</table>";
+  html += "<button type='submit' class='save-button'>💾 ЗБЕРЕГТИ ВСІ НАЛАШТУВАННЯ</button>";
+  html += "</form>";
+  html += "</div></body></html>";
+  server.sendHeader("Connection", "close");
+  server.send(200, "text/html; charset=UTF-8", html);
+}
+
+
 void handleScan() {
   // Виконуємо сканування
-  bleScanTask(); 
-  
+  bleScanTask();
+
   // Формуємо сторінку з результатами
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Сканування BMS</title>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
@@ -677,8 +772,8 @@ void handleScan() {
 }
 
 void handleSelectDevice() {
-    // Цей обробник потрібен для відображення результатів, але ми об'єднали його логіку з handleScan
-    handleScan();
+  // Цей обробник потрібен для відображення результатів, але ми об'єднали його логіку з handleScan
+  handleScan();
 }
 
 void handleConnect() {
@@ -715,13 +810,12 @@ void handleDisconnect() {
 
 void handleUpdate() {
   server.send(200, "text/html",
-    "<!DOCTYPE html><html><head><title>OTA Update</title><meta charset='UTF-8'>"
-    "<style>body{font-family: Arial; text-align: center;} input{padding: 10px; margin: 5px; border-radius: 5px;} .file-upload{border: 1px solid #ccc; padding: 20px; width: 300px; margin: 50px auto;}</style></head>"
-    "<body><h1>OTA Update</h1><p>Оберіть файл прошивки (.bin):</p>"
-    "<form method='POST' action='/update' enctype='multipart/form-data' class='file-upload'>"
-    "<input type='file' name='firmware'><input type='submit' value='Оновити'></form>"
-    "<a href='/'>&#9664; На головну</a></body></html>"
-  );
+              "<!DOCTYPE html><html><head><title>OTA Update</title><meta charset='UTF-8'>"
+              "<style>body{font-family: Arial; text-align: center;} input{padding: 10px; margin: 5px; border-radius: 5px;} .file-upload{border: 1px solid #ccc; padding: 20px; width: 300px; margin: 50px auto;}</style></head>"
+              "<body><h1>OTA Update</h1><p>Оберіть файл прошивки (.bin):</p>"
+              "<form method='POST' action='/update' enctype='multipart/form-data' class='file-upload'>"
+              "<input type='file' name='firmware'><input type='submit' value='Оновити'></form>"
+              "<a href='/'>&#9664; На головну</a></body></html>");
 }
 
 void handleUpdateUpload() {
@@ -754,34 +848,201 @@ void handleSettingsUpdate() {
     return;
   }
 
-  // Обробка Загальної ємності (Total Battery Capacity): Регістр 0x4D, float * 1000
-  if (server.hasArg("total_battery_capacity")) {
-    float val = server.arg("total_battery_capacity").toFloat();
-    // Перевіряємо, чи є значна зміна перед записом
-    if (std::abs(val - G_settings.total_battery_capacity) > FLOAT_TOLERANCE) {
-      writeRegister(0x4D, (uint32_t)(val * 1000), 0x04);
-      G_settings.total_battery_capacity = val; // Оновлюємо локальну копію
-      Serial.printf("Оновлено 0x4D: %.3f V\n", val);
-      delay(100);
+  // Всі налаштування записуються як 4-байтні (0x04) значення.
+
+  // --- VOLTAGE SETTINGS (Scale: 0.001 -> Multiplier: 1000) ---
+  if (server.hasArg("cell_voltage_overvoltage_protection")) {
+    float val = server.arg("cell_voltage_overvoltage_protection").toFloat();
+    if (std::abs(val - G_settings.cell_voltage_overvoltage_protection) > FLOAT_TOLERANCE) {
+      writeRegister(0x0C, (uint32_t)(val * 1000), 0x04);
+      G_settings.cell_voltage_overvoltage_protection = val;
     }
   }
-
-  // Обробка UVP (Undervoltage Protection)
+  if (server.hasArg("cell_voltage_overvoltage_recovery")) {
+    float val = server.arg("cell_voltage_overvoltage_recovery").toFloat();
+    if (std::abs(val - G_settings.cell_voltage_overvoltage_recovery) > FLOAT_TOLERANCE) {
+      writeRegister(0x0D, (uint32_t)(val * 1000), 0x04);
+      G_settings.cell_voltage_overvoltage_recovery = val;
+    }
+  }
   if (server.hasArg("cell_voltage_undervoltage_protection")) {
     float val = server.arg("cell_voltage_undervoltage_protection").toFloat();
     if (std::abs(val - G_settings.cell_voltage_undervoltage_protection) > FLOAT_TOLERANCE) {
-      writeRegister(0x41, (uint32_t)(val * 1000), 0x04); // Регістр 0x41
+      writeRegister(0x0A, (uint32_t)(val * 1000), 0x04);
       G_settings.cell_voltage_undervoltage_protection = val;
-      Serial.printf("Оновлено 0x41: %.3f V\n", val);
-      delay(100);
+    }
+  }
+  if (server.hasArg("cell_voltage_undervoltage_recovery")) {
+    float val = server.arg("cell_voltage_undervoltage_recovery").toFloat();
+    if (std::abs(val - G_settings.cell_voltage_undervoltage_recovery) > FLOAT_TOLERANCE) {
+      writeRegister(0x0B, (uint32_t)(val * 1000), 0x04);
+      G_settings.cell_voltage_undervoltage_recovery = val;
+    }
+  }
+  if (server.hasArg("power_off_voltage")) {
+    float val = server.arg("power_off_voltage").toFloat();
+    if (std::abs(val - G_settings.power_off_voltage) > FLOAT_TOLERANCE) {
+      writeRegister(0x14, (uint32_t)(val * 1000), 0x04);
+      G_settings.power_off_voltage = val;
+    }
+  }
+  if (server.hasArg("balance_trigger_voltage")) {
+    float val = server.arg("balance_trigger_voltage").toFloat();
+    if (std::abs(val - G_settings.balance_trigger_voltage) > FLOAT_TOLERANCE) {
+      writeRegister(0x0E, (uint32_t)(val * 1000), 0x04);
+      G_settings.balance_trigger_voltage = val;
+    }
+  }
+  if (server.hasArg("balance_starting_voltage")) {
+    float val = server.arg("balance_starting_voltage").toFloat();
+    if (std::abs(val - G_settings.balance_starting_voltage) > FLOAT_TOLERANCE) {
+      writeRegister(0x24, (uint32_t)(val * 1000), 0x04);
+      G_settings.balance_starting_voltage = val;
     }
   }
 
+  // --- CURRENT & CAPACITY SETTINGS (Scale: 0.001 -> Multiplier: 1000) ---
+  if (server.hasArg("max_charge_current")) {
+    float val = server.arg("max_charge_current").toFloat();
+    if (std::abs(val - G_settings.max_charge_current) > FLOAT_TOLERANCE) {
+      writeRegister(0x15, (uint32_t)(val * 1000), 0x04);
+      G_settings.max_charge_current = val;
+    }
+  }
+  if (server.hasArg("max_discharge_current")) {
+    float val = server.arg("max_discharge_current").toFloat();
+    if (std::abs(val - G_settings.max_discharge_current) > FLOAT_TOLERANCE) {
+      writeRegister(0x18, (uint32_t)(val * 1000), 0x04);
+      G_settings.max_discharge_current = val;
+    }
+  }
+  if (server.hasArg("max_balance_current")) {
+    float val = server.arg("max_balance_current").toFloat();
+    if (std::abs(val - G_settings.max_balance_current) > FLOAT_TOLERANCE) {
+      writeRegister(0x1C, (uint32_t)(val * 1000), 0x04);
+      G_settings.max_balance_current = val;
+    }
+  }
+
+  // Total Battery Capacity (Регістр 0x4D)
+  if (server.hasArg("total_battery_capacity")) {
+    float val = server.arg("total_battery_capacity").toFloat();
+    if (std::abs(val - G_settings.total_battery_capacity) > FLOAT_TOLERANCE) {
+      writeRegister(0x4D, (uint32_t)(val * 1000), 0x04);
+      G_settings.total_battery_capacity = val;
+    }
+  }
+
+
+  // --- TIME/DELAY SETTINGS (Scale: 1 -> Multiplier: 1) ---
+  if (server.hasArg("charge_overcurrent_protection_delay")) {
+    float val = server.arg("charge_overcurrent_protection_delay").toFloat();
+    if (std::abs(val - G_settings.charge_overcurrent_protection_delay) > FLOAT_TOLERANCE) {
+      writeRegister(0x16, (uint32_t)val, 0x04);
+      G_settings.charge_overcurrent_protection_delay = val;
+    }
+  }
+  if (server.hasArg("charge_overcurrent_protection_recovery_time")) {
+    float val = server.arg("charge_overcurrent_protection_recovery_time").toFloat();
+    if (std::abs(val - G_settings.charge_overcurrent_protection_recovery_time) > FLOAT_TOLERANCE) {
+      writeRegister(0x17, (uint32_t)val, 0x04);
+      G_settings.charge_overcurrent_protection_recovery_time = val;
+    }
+  }
+  if (server.hasArg("discharge_overcurrent_protection_delay")) {
+    float val = server.arg("discharge_overcurrent_protection_delay").toFloat();
+    if (std::abs(val - G_settings.discharge_overcurrent_protection_delay) > FLOAT_TOLERANCE) {
+      writeRegister(0x19, (uint32_t)val, 0x04);
+      G_settings.discharge_overcurrent_protection_delay = val;
+    }
+  }
+  if (server.hasArg("discharge_overcurrent_protection_recovery_time")) {
+    float val = server.arg("discharge_overcurrent_protection_recovery_time").toFloat();
+    if (std::abs(val - G_settings.discharge_overcurrent_protection_recovery_time) > FLOAT_TOLERANCE) {
+      writeRegister(0x1A, (uint32_t)val, 0x04);
+      G_settings.discharge_overcurrent_protection_recovery_time = val;
+    }
+  }
+  if (server.hasArg("short_circuit_protection_recovery_time")) {
+    float val = server.arg("short_circuit_protection_recovery_time").toFloat();
+    if (std::abs(val - G_settings.short_circuit_protection_recovery_time) > FLOAT_TOLERANCE) {
+      writeRegister(0x1B, (uint32_t)val, 0x04);
+      G_settings.short_circuit_protection_recovery_time = val;
+    }
+  }
+  if (server.hasArg("short_circuit_protection_delay")) {
+    float val = server.arg("short_circuit_protection_delay").toFloat();
+    if (std::abs(val - G_settings.short_circuit_protection_delay) > FLOAT_TOLERANCE) {
+      writeRegister(0x23, (uint32_t)val, 0x04);
+      G_settings.short_circuit_protection_delay = val;
+    }
+  }
+
+  // --- TEMPERATURE SETTINGS (Scale: 0.1 -> Multiplier: 10) ---
+  if (server.hasArg("charge_overtemperature_protection")) {
+    float val = server.arg("charge_overtemperature_protection").toFloat();
+    if (std::abs(val - G_settings.charge_overtemperature_protection) > FLOAT_TOLERANCE) {
+      writeRegister(0x1D, (uint32_t)(val * 10), 0x04);
+      G_settings.charge_overtemperature_protection = val;
+    }
+  }
+  if (server.hasArg("charge_overtemperature_protection_recovery")) {
+    float val = server.arg("charge_overtemperature_protection_recovery").toFloat();
+    if (std::abs(val - G_settings.charge_overtemperature_protection_recovery) > FLOAT_TOLERANCE) {
+      writeRegister(0x1E, (uint32_t)(val * 10), 0x04);
+      G_settings.charge_overtemperature_protection_recovery = val;
+    }
+  }
+  if (server.hasArg("discharge_overtemperature_protection")) {
+    float val = server.arg("discharge_overtemperature_protection").toFloat();
+    if (std::abs(val - G_settings.discharge_overtemperature_protection) > FLOAT_TOLERANCE) {
+      writeRegister(0x1F, (uint32_t)(val * 10), 0x04);
+      G_settings.discharge_overtemperature_protection = val;
+    }
+  }
+  if (server.hasArg("discharge_overtemperature_protection_recovery")) {
+    float val = server.arg("discharge_overtemperature_protection_recovery").toFloat();
+    if (std::abs(val - G_settings.discharge_overtemperature_protection_recovery) > FLOAT_TOLERANCE) {
+      writeRegister(0x20, (uint32_t)(val * 10), 0x04);
+      G_settings.discharge_overtemperature_protection_recovery = val;
+    }
+  }
+  if (server.hasArg("charge_undertemperature_protection")) {
+    float val = server.arg("charge_undertemperature_protection").toFloat();
+    if (std::abs(val - G_settings.charge_undertemperature_protection) > FLOAT_TOLERANCE) {
+      writeRegister(0x21, (uint32_t)(val * 10), 0x04);
+      G_settings.charge_undertemperature_protection = val;
+    }
+  }
+  if (server.hasArg("charge_undertemperature_protection_recovery")) {
+    float val = server.arg("charge_undertemperature_protection_recovery").toFloat();
+    if (std::abs(val - G_settings.charge_undertemperature_protection_recovery) > FLOAT_TOLERANCE) {
+      writeRegister(0x22, (uint32_t)(val * 10), 0x04);
+      G_settings.charge_undertemperature_protection_recovery = val;
+    }
+  }
+  if (server.hasArg("power_tube_overtemperature_protection")) {
+    float val = server.arg("power_tube_overtemperature_protection").toFloat();
+    if (std::abs(val - G_settings.power_tube_overtemperature_protection) > FLOAT_TOLERANCE) {
+      writeRegister(0x25, (uint32_t)(val * 10), 0x04);
+      G_settings.power_tube_overtemperature_protection = val;
+    }
+  }
+  if (server.hasArg("power_tube_overtemperature_protection_recovery")) {
+    float val = server.arg("power_tube_overtemperature_protection_recovery").toFloat();
+    if (std::abs(val - G_settings.power_tube_overtemperature_protection_recovery) > FLOAT_TOLERANCE) {
+      writeRegister(0x26, (uint32_t)(val * 10), 0x04);
+      G_settings.power_tube_overtemperature_protection_recovery = val;
+    }
+  }
+
+
+  Serial.println("Оновлення налаштувань BMS завершено.");
   // Запит налаштувань для перевірки (0x96)
   writeRegister(0x96, 0x00000000, 0x00);
-  
-  delay(1500); // Даємо час BMS обробити команду
-  
+
+  delay(1500);  // Даємо час BMS обробити команду
+
   // Перенаправляємо на головну сторінку
   server.sendHeader("Location", "/");
   server.send(302, "text/plain; charset=UTF-8", "Settings Updated. Redirecting...");
@@ -791,54 +1052,76 @@ void handleSettingsUpdate() {
 // --- Handlers для включення/виключення ---
 
 void handleChargeOn() {
-  if (isConnected) {
-    writeRegister(0x1D, 0x00000001, 0x04); // Регістр 0x1D для Charge ON
+  if (!isConnected) {
+    server.send(403, "text/plain; charset=UTF-8", "Error: Not connected to BMS.");
+    return;
   }
+  writeRegister(0x1D, 0x00000001, 0x04);  // Регістр 0x1D для Charge ON
+
   delay(1500);
   server.sendHeader("Location", "/");
   server.send(302, "text/plain; charset=UTF-8", "Redirecting...");
 }
 
 void handleChargeOff() {
-  if (isConnected) {
-    writeRegister(0x1D, 0x00000000, 0x04); // Регістр 0x1D для Charge OFF
+  if (!isConnected) {
+    server.send(403, "text/plain; charset=UTF-8", "Error: Not connected to BMS.");
+    return;
   }
+  writeRegister(0x1D, 0x00000000, 0x04);  // Регістр 0x1D для Charge OFF
+
   delay(1500);
   server.sendHeader("Location", "/");
   server.send(302, "text/plain; charset=UTF-8", "Redirecting...");
 }
 
 void handleDischargeOn() {
-  if (isConnected) {
-    writeRegister(0x1E, 0x00000001, 0x04); // Регістр 0x1E для Discharge ON
+  if (!isConnected) {
+    server.send(403, "text/plain; charset=UTF-8", "Error: Not connected to BMS.");
+    return;
   }
+
+  writeRegister(0x1E, 0x00000001, 0x04);  // Регістр 0x1E для Discharge ON
+
   delay(1500);
   server.sendHeader("Location", "/");
   server.send(302, "text/plain; charset=UTF-8", "Redirecting...");
 }
 
 void handleDischargeOff() {
-  if (isConnected) {
-    writeRegister(0x1E, 0x00000000, 0x04); // Регістр 0x1E для Discharge OFF
+  if (!isConnected) {
+    server.send(403, "text/plain; charset=UTF-8", "Error: Not connected to BMS.");
+    return;
   }
+
+  writeRegister(0x1E, 0x00000000, 0x04);  // Регістр 0x1E для Discharge OFF
+
   delay(1500);
   server.sendHeader("Location", "/");
   server.send(302, "text/plain; charset=UTF-8", "Redirecting...");
 }
 
 void handleBalanceOn() {
-  if (isConnected) {
-    writeRegister(0x1F, 0x00000001, 0x04); // Регістр 0x1F для Balance ON
+  if (!isConnected) {
+    server.send(403, "text/plain; charset=UTF-8", "Error: Not connected to BMS.");
+    return;
   }
+
+  writeRegister(0x1F, 0x00000001, 0x04);  // Регістр 0x1F для Balance ON
+
   delay(1500);
   server.sendHeader("Location", "/");
   server.send(302, "text/plain; charset=UTF-8", "Redirecting...");
 }
 
 void handleBalanceOff() {
-  if (isConnected) {
-    writeRegister(0x1F, 0x00000000, 0x04); // Регістр 0x1F для Balance OFF
+  if (!isConnected) {
+    server.send(403, "text/plain; charset=UTF-8", "Error: Not connected to BMS.");
+    return;
   }
+
+  writeRegister(0x1F, 0x00000000, 0x04);  // Регістр 0x1F для Balance OFF
+
   delay(1500);
   server.sendHeader("Location", "/");
   server.send(302, "text/plain; charset=UTF-8", "Redirecting...");
@@ -865,17 +1148,18 @@ void init_wifi() {
 // Функція задачі для Веб-сервера, запущена в окремому ядрі
 void webServerTask(void* parameter) {
   server.on("/", handleRoot);
+  server.on("/settings", handleSettings);
   server.on("/charge_on", handleChargeOn);
   server.on("/charge_off", handleChargeOff);
   server.on("/discharge_on", handleDischargeOn);
   server.on("/discharge_off", handleDischargeOff);
-  server.on("/balance_on", handleBalanceOn); 
-  server.on("/balance_off", handleBalanceOff); 
+  server.on("/balance_on", handleBalanceOn);
+  server.on("/balance_off", handleBalanceOff);
   server.on("/connect", HTTP_GET, handleConnect);
   server.on("/update", HTTP_GET, handleUpdate);
   // ВИПРАВЛЕНО: Правильний синтаксис для обробки завантаження файлу (OTA)
   server.on("/update", HTTP_POST, handleUpdate, handleUpdateUpload);
-  server.on("/settings_update", HTTP_POST, handleSettingsUpdate); 
+  server.on("/settings_update", HTTP_POST, handleSettingsUpdate);
   server.on("/scan", HTTP_GET, handleScan);
   server.on("/select_device", HTTP_GET, handleSelectDevice);
   server.on("/disconnect", HTTP_GET, handleDisconnect);
@@ -894,23 +1178,25 @@ void setup() {
   Serial.begin(115200);
 
   init_wifi();
-  
+
   // 1. Ініціалізація BLE
   BLEDevice::init("");
   pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-  pBLEScan->setActiveScan(true); 
-  
+  pBLEScan->setActiveScan(true);
+
   // 2. Створення та прив'язка задачі для Веб-сервера (запуск на Core 1)
   xTaskCreatePinnedToCore(
     webServerTask,
     "WebServer",
-    10000,    // Розмір стека
+    10000,  // Розмір стека
     NULL,
-    10,       // Пріоритет
+    10,  // Пріоритет
     NULL,
-    0         // Core 1
+    0  // Core 1
   );
+
+    bleScanTask();
 }
 
 void loop() {
