@@ -530,7 +530,7 @@ void handleRoot() {
   html += ".group-header th { background-color: #4CAF50; }";  // Додано стиль для заголовків груп налаштувань
   html += ".save-button { display: block; width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1.1em; margin-top: 20px; }";
   html += "</style></head><body><div class='container'>";
-  html += "<h1>⚡️ Дані Jikong BMS (ESP32)</h1>";
+  html += "<h1>⚡️ Дані Jikong BMS </h1>";
 
   // Кнопка сканування, якщо відключено
   if (!isConnected) {
@@ -548,10 +548,10 @@ void handleRoot() {
     html += "<a href='/update' class='ota-button'>(OTA)</a>";
 
     // --- Кнопка НАЛАШТУВАННЯ ---
-    html += "<a href='/settings' class='settings-button'>⚙️ НАЛАШТУВАННЯ BMS</a>";  // НОВЕ ПОСИЛАННЯ
+    html += "<a href='/settings' class='ota-button'>⚙️</a>";  // НОВЕ ПОСИЛАННЯ
 
     // --- Кнопка ВІДКЛЮЧИТИСЯ ---
-    html += "<a href='/disconnect' class='disconnect-button'>❌ ВІДКЛЮЧИТИСЯ</a></em></p>";
+    html += "<a href='/disconnect' class='ota-button'>❌</a></em></p>";
   }
 
   // --- Загальні дані ---
@@ -560,11 +560,10 @@ void handleRoot() {
   html += "<tr><th>Параметр</th><th>Значення</th><th>Од. виміру</th></tr>";
 
   if (parsedata) {
-    // *** ЗБЕРЕЖЕНО ОРИГІНАЛЬНИЙ СПОСІБ ПЕРЕТВОРЕННЯ В СТРОКУ ***
     html += "<tr><td>Напруга батареї</td><td>" + String(G_data.Battery_Voltage, 2) + "</td><td>V</td></tr>";
-    html += "<tr><td>Кількість комірок</td><td>" + String(G_data.real_cell_count) + "</td><td>Шт</td></tr>";
     html += "<tr><td>Струм заряду/розряду</td><td>" + String(G_data.Charge_Current, 2) + "</td><td>A</td></tr>";
     html += "<tr><td>Потужність</td><td>" + String(G_data.Battery_Power, 2) + "</td><td>W</td></tr>";
+    html += "<tr><td>Кількість комірок</td><td>" + String(G_data.real_cell_count) + "</td><td>Шт</td></tr>";
     html += "<tr><td>Залишок заряду (SOC)</td><td>" + String(G_data.Percent_Remain) + "</td><td>%</td></tr>";
     html += "<tr><td>Залишкова ємність</td><td>" + String(G_data.Capacity_Remain, 3) + "</td><td>Ah</td></tr>";
     html += "<tr><td>Номінальна ємність</td><td>" + String(G_data.Nominal_Capacity, 3) + "</td><td>Ah</td></tr>";
@@ -622,19 +621,23 @@ void handleRoot() {
     }
     html += "</table>";
   }
-  if (parseinfo) {
+
+ if (parseinfo) {
     // --- Інфо про пристрій ---
     html += "<h2>⚙️ Інформація про Пристрій BMS</h2>";
     html += "<table>";
     html += "<tr><th>Параметр</th><th>Значення</th></tr>";
-    html += "<tr><td>Ім'я пристрою</td><td>" + String(G_info.deviceName.c_str()) + "</td></tr>";
+    html += "<tr><td>Назва пристрою</td><td>" + String(G_info.deviceName.c_str()) + "</td></tr>";
     html += "<tr><td>Серійний номер</td><td>" + String(G_info.serialNumber.c_str()) + "</td></tr>";
     html += "<tr><td>Версія HW/SW</td><td>" + String(G_info.hardwareVersion.c_str()) + " / " + String(G_info.softwareVersion.c_str()) + "</td></tr>";
-    html += "<tr><td>Vendor ID</td><td>" + String(G_info.vendorID.c_str()) + "</td></tr>";
+    html += "<tr><td>ID Постачальника</td><td>" + String(G_info.vendorID.c_str()) + "</td></tr>";
     html += "<tr><td>Дата виготовлення</td><td>" + String(G_info.manufacturingDate.c_str()) + "</td></tr>";
     html += "<tr><td>Кількість увімкнень</td><td>" + String(G_info.powerOnCount) + "</td></tr>";
+    html += "<tr><td>Код доступу</td><td>" + String(G_info.passcode.c_str()) + "</td></tr>";
+    html += "<tr><td>Дані користувача</td><td>" + String(G_info.userData.c_str()) + "</td></tr>";
+    
     html += "</table>";
-  }
+}
 
   html += "</div></body></html>";
   server.sendHeader("Connection", "close");
