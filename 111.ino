@@ -21,7 +21,7 @@
 // --- 2. WIFI & WEB SERVER CONFIGURATION --------------------------------------
 // -----------------------------------------------------------------------------
 
-const char* ssid = "fullrezerv";                // <-- ЗАМЕНІТЬ на ваш SSID
+const char* ssid = "fullrezerv";      // <-- ЗАМЕНІТЬ на ваш SSID
 const char* password = "1234567890";  // <-- ЗАМЕНІТЬ на ваш пароль
 
 WebServer server(80);
@@ -100,7 +100,7 @@ struct BMS_Data {
   bool Charge = false;
   bool Discharge = false;
   int Balancing_Action = 0;
-  int cell_count = 0;
+  int real_cell_count = 0;
 } G_data;
 
 
@@ -131,6 +131,7 @@ struct BMS_Settings {
   float total_battery_capacity = 0;
   float short_circuit_protection_delay = 0;
   float balance_starting_voltage = 0;
+  int cell_count = 0;
 } G_settings;
 
 // Структура для інформації про прилад
@@ -187,12 +188,14 @@ void writeRegister(uint8_t address, uint32_t value, uint8_t length) {
 // -----------------------------------------------------------------------------
 
 void parseBMSData() {
-  parsedata = true;
-
+  G_data.real_cell_count = 0;
 
   // Напруги комірок
   for (int j = 0, i = 7; i < 38; j++, i += 2) {
     G_data.cellVoltage[j] = ((receivedBytes[i] << 8 | receivedBytes[i - 1]) * 0.001);
+    if (G_data.cellVoltage[j] > 0.1) {
+      G_data.real_cell_count += 1;
+    }
   }
 
   // Опори дротів
@@ -258,6 +261,8 @@ void parseBMSData() {
   G_data.Charge = (receivedBytes[198] > 0);
   G_data.Discharge = (receivedBytes[199] > 0);
   G_data.Balance = (receivedBytes[201] > 0);
+
+  parsedata = true;
 }
 
 void parseBMSSettings() {
@@ -283,7 +288,7 @@ void parseBMSSettings() {
   G_settings.charge_undertemperature_protection_recovery = ((receivedBytes[105] << 24 | receivedBytes[104] << 16 | receivedBytes[103] << 8 | receivedBytes[102]) * 0.1);
   G_settings.power_tube_overtemperature_protection = ((receivedBytes[109] << 24 | receivedBytes[108] << 16 | receivedBytes[107] << 8 | receivedBytes[106]) * 0.1);
   G_settings.power_tube_overtemperature_protection_recovery = ((receivedBytes[113] << 24 | receivedBytes[112] << 16 | receivedBytes[111] << 8 | receivedBytes[110]) * 0.1);
-  G_data.cell_count = ((receivedBytes[117] << 24 | receivedBytes[116] << 16 | receivedBytes[115] << 8 | receivedBytes[114]));
+  G_settings.cell_count = ((receivedBytes[117] << 24 | receivedBytes[116] << 16 | receivedBytes[115] << 8 | receivedBytes[114]));
   G_settings.total_battery_capacity = ((receivedBytes[133] << 24 | receivedBytes[132] << 16 | receivedBytes[131] << 8 | receivedBytes[130]) * 0.001);
   G_settings.short_circuit_protection_delay = ((receivedBytes[137] << 24 | receivedBytes[136] << 16 | receivedBytes[135] << 8 | receivedBytes[134]) * 1);
   G_settings.balance_starting_voltage = ((receivedBytes[141] << 24 | receivedBytes[140] << 16 | receivedBytes[139] << 8 | receivedBytes[138]) * 0.001);
@@ -312,6 +317,7 @@ void parseDeviceInfo() {
   // Парсинг uint32_t (Little-Endian)
   G_info.uptime = (receivedBytes[41] << 24) | (receivedBytes[40] << 16) | (receivedBytes[39] << 8) | receivedBytes[38];
   G_info.powerOnCount = (receivedBytes[45] << 24) | (receivedBytes[44] << 16) | (receivedBytes[43] << 8) | receivedBytes[42];
+
   parseinfo = true;
 }
 
@@ -513,7 +519,7 @@ void handleRoot() {
   html += ".scan-button, .ota-button, .control-button, .disconnect-button, .settings-button { display: inline-block; padding: 10px 15px; margin-top: 10px; border-radius: 5px; text-decoration: none; color: white; font-weight: bold; text-align: center; }";
   html += ".scan-button { background-color: #28a745; margin-bottom: 20px; }";
   html += ".ota-button { background-color: #ffc107; margin-bottom: 20px; margin-right: 10px; }";
-  html += ".settings-button { background-color: #007bff; margin-bottom: 20px; margin-left: 10px; }"; // НОВА КНОПКА
+  html += ".settings-button { background-color: #007bff; margin-bottom: 20px; margin-left: 10px; }";  // НОВА КНОПКА
   html += ".disconnect-button { background-color: #dc3545; margin-left: 10px; }";
   html += ".control-button { padding: 5px 10px; font-size: 0.9em; margin: 2px; }";
   html += ".toggle-on { background-color: #28a745; }";
@@ -521,7 +527,7 @@ void handleRoot() {
   html += ".status-connected { color: green; font-weight: bold; }";
   html += ".status-disconnected { color: red; font-weight: bold; }";
   html += ".cell-table td { font-size: 0.9em; }";
-  html += ".group-header th { background-color: #4CAF50; }"; // Додано стиль для заголовків груп налаштувань
+  html += ".group-header th { background-color: #4CAF50; }";  // Додано стиль для заголовків груп налаштувань
   html += ".save-button { display: block; width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1.1em; margin-top: 20px; }";
   html += "</style></head><body><div class='container'>";
   html += "<h1>⚡️ Дані Jikong BMS (ESP32)</h1>";
@@ -536,13 +542,13 @@ void handleRoot() {
   } else {
     String connectionStatus = isConnected ? "<span class='status-connected'>ПІДКЛЮЧЕНО</span>" : "<span class='status-disconnected'>ВІДКЛЮЧЕНО</span>";
     html += "<p style='text-align: center;' ><em>IP-адреса: <strong>" + WiFi.localIP().toString() + "</strong> | Статус BMS: " + connectionStatus + "</em></p>";
-    html += "<p style='text-align: center;' >"; // Початок блоку кнопок
+    html += "<p style='text-align: center;' >";  // Початок блоку кнопок
 
     // --- Кнопка OTA ---
     html += "<a href='/update' class='ota-button'>(OTA)</a>";
-    
+
     // --- Кнопка НАЛАШТУВАННЯ ---
-    html += "<a href='/settings' class='settings-button'>⚙️ НАЛАШТУВАННЯ BMS</a>"; // НОВЕ ПОСИЛАННЯ
+    html += "<a href='/settings' class='settings-button'>⚙️ НАЛАШТУВАННЯ BMS</a>";  // НОВЕ ПОСИЛАННЯ
 
     // --- Кнопка ВІДКЛЮЧИТИСЯ ---
     html += "<a href='/disconnect' class='disconnect-button'>❌ ВІДКЛЮЧИТИСЯ</a></em></p>";
@@ -556,7 +562,7 @@ void handleRoot() {
   if (parsedata) {
     // *** ЗБЕРЕЖЕНО ОРИГІНАЛЬНИЙ СПОСІБ ПЕРЕТВОРЕННЯ В СТРОКУ ***
     html += "<tr><td>Напруга батареї</td><td>" + String(G_data.Battery_Voltage, 2) + "</td><td>V</td></tr>";
-    html += "<tr><td>Кількість комірок</td><td>" + String(G_data.cell_count, 2) + "</td><td>Шт</td></tr>";
+    html += "<tr><td>Кількість комірок</td><td>" + String(G_data.real_cell_count) + "</td><td>Шт</td></tr>";
     html += "<tr><td>Струм заряду/розряду</td><td>" + String(G_data.Charge_Current, 2) + "</td><td>A</td></tr>";
     html += "<tr><td>Потужність</td><td>" + String(G_data.Battery_Power, 2) + "</td><td>W</td></tr>";
     html += "<tr><td>Залишок заряду (SOC)</td><td>" + String(G_data.Percent_Remain) + "</td><td>%</td></tr>";
@@ -600,14 +606,15 @@ void handleRoot() {
     html += "<h2>🔬 Напруги комірок</h2>";
     html += "<table class='cell-table'>";
     html += "<tr><th>Комірка</th><th>Напруга (V)</th><th>Опір (Ом)</th></tr>";
-    for (int j = 0; j < G_data.cell_count; j++) {
-      if (G_data.cellVoltage[j] > 0.1) {
-        html += "<tr><td>" + String(j + 1) + "</td><td>" + String(G_data.cellVoltage[j], 3) + "</td><td>" + String(G_data.wireResist[j], 3) + "</td></tr>";
-      }
-    }
     // Fallback для комірок, якщо count = 0
-    if (G_data.cell_count == 0) {
+    if (G_data.real_cell_count == 0) {
       for (int j = 0; j < 16; j++) {
+        if (G_data.cellVoltage[j] > 0.1) {
+          html += "<tr><td>" + String(j + 1) + "</td><td>" + String(G_data.cellVoltage[j], 3) + "</td><td>" + String(G_data.wireResist[j], 3) + "</td></tr>";
+        }
+      }
+    } else {
+      for (int j = 0; j < G_data.real_cell_count; j++) {
         if (G_data.cellVoltage[j] > 0.1) {
           html += "<tr><td>" + String(j + 1) + "</td><td>" + String(G_data.cellVoltage[j], 3) + "</td><td>" + String(G_data.wireResist[j], 3) + "</td></tr>";
         }
@@ -657,19 +664,23 @@ void handleSettings() {
   html += "th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }";
   html += "th { background-color: #007bff; color: white; }";
   html += "tr:nth-child(even) { background-color: #f2f2f2; }";
-  html += ".group-header th { background-color: #4CAF50; }"; // Заголовки груп
+  html += ".group-header th { background-color: #4CAF50; }";  // Заголовки груп
   html += "input[type='number'] { width: 90%; padding: 5px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }";
   html += ".save-button { display: block; width: 100%; padding: 15px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1.2em; margin-top: 20px; }";
   html += ".back-button { display: inline-block; padding: 8px 15px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 5px; margin-bottom: 15px; }";
   html += "</style></head><body><div class='container'>";
   html += "<h1>⚙️ Налаштування Jikong BMS</h1>";
-  html += "<a href='/' class='back-button'>⬅️ На головну</a>"; // Кнопка назад
+  html += "<a href='/' class='back-button'>⬅️ На головну</a>";  // Кнопка назад
 
   // --- Налаштування BMS (скопійовано з оригінальної функції) ---
   html += "<h2>⚙️ Параметри BMS</h2>";
   html += "<form method='POST' action='/settings_update' class='settings-form'>";
   html += "<table>";
   html += "<tr><th>Параметр</th><th>Поточне значення</th><th>Нове значення</th></tr>";
+
+  // total_battery_capacity (0x4D) - ЄМНІСТЬ
+  html += "<tr class='group-header'><th colspan='3'>Основні налаштування</th></tr>";
+  html += "<tr><td>Номінальна ємність (Ah)</td><td>" + String(G_settings.total_battery_capacity, 3) + "</td><td><input type='number' name='total_battery_capacity' value='" + String(G_settings.total_battery_capacity, 3) + "' step='0.001' min='0.001' max='5000' required></td></tr>";
 
   // --- Напруги комірок ---
   html += "<tr class='group-header'><th colspan='3'>Напруги комірок (V)</th></tr>";
@@ -693,10 +704,10 @@ void handleSettings() {
   // max_balance_current (0x1C)
   html += "<tr><td>Макс. струм балансування (A)</td><td>" + String(G_settings.max_balance_current, 3) + "</td><td><input type='number' name='max_balance_current' value='" + String(G_settings.max_balance_current, 3) + "' step='0.001' min='0' max='1' required></td></tr>";
 
-  
 
 
-   // --- Температури ---
+
+  // --- Температури ---
   html += "<tr class='group-header'><th colspan='3'>Температурні Захисти (°C)</th></tr>";
   // charge_overtemperature_protection (0x1D)
   html += "<tr><td>Заряд: Перегрів захист</td><td>" + String(G_settings.charge_overtemperature_protection, 1) + "</td><td><input type='number' name='charge_overtemperature_protection' value='" + String(G_settings.charge_overtemperature_protection, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
@@ -714,10 +725,6 @@ void handleSettings() {
   html += "<tr><td>MOSFET: Перегрів захист</td><td>" + String(G_settings.power_tube_overtemperature_protection, 1) + "</td><td><input type='number' name='power_tube_overtemperature_protection' value='" + String(G_settings.power_tube_overtemperature_protection, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
   // power_tube_overtemperature_protection_recovery (0x26)
   html += "<tr><td>MOSFET: Відновлення перегріву</td><td>" + String(G_settings.power_tube_overtemperature_protection_recovery, 1) + "</td><td><input type='number' name='power_tube_overtemperature_protection_recovery' value='" + String(G_settings.power_tube_overtemperature_protection_recovery, 1) + "' step='0.1' min='-40' max='150' required></td></tr>";
-
-  // total_battery_capacity (0x4D) - ЄМНІСТЬ
-  html += "<tr class='group-header'><th colspan='3'>Ємність (Ah)</th></tr>";
-  html += "<tr><td>Номінальна ємність (Ah)</td><td>" + String(G_settings.total_battery_capacity, 3) + "</td><td><input type='number' name='total_battery_capacity' value='" + String(G_settings.total_battery_capacity, 3) + "' step='0.001' min='0.001' max='5000' required></td></tr>";
 
   // --- Кнопка збереження ---
   html += "</table>";
@@ -1196,7 +1203,7 @@ void setup() {
     0  // Core 1
   );
 
-    bleScanTask();
+  bleScanTask();
 }
 
 void loop() {
