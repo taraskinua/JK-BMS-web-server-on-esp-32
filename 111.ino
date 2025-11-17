@@ -530,7 +530,7 @@ void handleRoot() {
   html += ".group-header th { background-color: #4CAF50; }";  // Додано стиль для заголовків груп налаштувань
   html += ".save-button { display: block; width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1.1em; margin-top: 20px; }";
   html += "</style></head><body><div class='container'>";
-  html += "<h1>⚡️ Дані Jikong BMS </h1>";
+  html += "<h1>⚡️ Дані Jikong BMS (ESP32)</h1>";
 
   // Кнопка сканування, якщо відключено
   if (!isConnected) {
@@ -543,62 +543,147 @@ void handleRoot() {
     String connectionStatus = isConnected ? "<span class='status-connected'>ПІДКЛЮЧЕНО</span>" : "<span class='status-disconnected'>ВІДКЛЮЧЕНО</span>";
     html += "<p style='text-align: center;' ><em>IP-адреса: <strong>" + WiFi.localIP().toString() + "</strong> | Статус BMS: " + connectionStatus + "</em></p>";
     html += "<p style='text-align: center;' >";  // Початок блоку кнопок
-
-    // --- Кнопка OTA ---
     html += "<a href='/update' class='ota-button'>(OTA)</a>";
-
-    // --- Кнопка НАЛАШТУВАННЯ ---
-    html += "<a href='/settings' class='ota-button'>⚙️</a>";  // НОВЕ ПОСИЛАННЯ
-
-    // --- Кнопка ВІДКЛЮЧИТИСЯ ---
-    html += "<a href='/disconnect' class='ota-button'>❌</a></em></p>";
+    html += "<a href='/settings' class='settings-button'>⚙️ НАЛАШТУВАННЯ BMS</a>";
+    html += "<a href='/info' class='settings-button' style='background-color: #6c757d;'>ℹ️ ІНФО</a>";
+    html += "<a href='/disconnect' class='settings-button'>❌ ВІДКЛЮЧИТИСЯ</a></em></p>";
   }
 
   // --- Загальні дані ---
   html += "<h2>📊 Загальні дані</h2>";
   html += "<table>";
   html += "<tr><th>Параметр</th><th>Значення</th><th>Од. виміру</th></tr>";
+  html += "<tr><td>Напруга батареї</td><td>" + String(G_data.Battery_Voltage, 2) + "</td><td>V</td></tr>";
+  html += "<tr><td>Струм заряду/розряду</td><td>" + String(G_data.Charge_Current, 2) + "</td><td>A</td></tr>";
+  html += "<tr><td>Потужність</td><td>" + String(G_data.Battery_Power, 2) + "</td><td>W</td></tr>";
+  html += "<tr><td>Залишок заряду (SOC)</td><td>" + String(G_data.Percent_Remain) + "</td><td>%</td></tr>";
+  html += "<tr><td>Дельта напруг комірок</td><td>" + String(G_data.Delta_Cell_Voltage, 3) + "</td><td>V</td></tr>";
 
-  if (parsedata) {
+  // --- КЕРУВАННЯ ЗАРЯДОМ ---
+  html += "<tr><td>Дозволено заряд</td><td>" + String(G_data.Charge ? "🟢 УВІМК" : "🔴 ВИМК") + "</td><td>";
+  if (G_data.Charge) {
+    html += "<a href='/charge_off' class='control-button toggle-off off'>ВИМКНУТИ ЗАРЯД</a>";
+  } else {
+    html += "<a href='/charge_on' class='control-button toggle-on'>УВІМКНУТИ ЗАРЯД</a>";
+  }
+  html += "</td></tr>";
+
+  // --- КЕРУВАННЯ РОЗРЯДОМ ---
+  html += "<tr><td>Дозволено розряд</td><td>" + String(G_data.Discharge ? "🟢 УВІМК" : "🔴 ВИМК") + "</td><td>";
+  if (G_data.Discharge) {
+    html += "<a href='/discharge_off' class='control-button toggle-off off'>ВИМКНУТИ РОЗРЯД</a>";
+  } else {
+    html += "<a href='/discharge_on' class='control-button toggle-on discharge'>УВІМКНУТИ РОЗРЯД</a>";
+  }
+  html += "</td></tr>";
+
+  // --- КЕРУВАННЯ БАЛАНСУВАННЯМ ---
+  html += "<tr><td>Балансування</td><td>" + String(G_data.Balance ? "🟢 Активне" : "⚪ Неактивне") + "</td><td>";
+  if (G_data.Balance) {
+    html += "<a href='/balance_off' class='control-button toggle-off off'>ВИМКНУТИ БАЛАНС</a>";
+  } else {
+    html += "<a href='/balance_on' class='control-button toggle-on'>УВІМКНУТИ БАЛАНС</a>";
+  }
+  html += "</td></tr>";
+  html += "<tr><td>Струм балансування</td><td>" + String(G_data.Balance_Curr, 3) + " A</td><td></td></tr>";
+  html += "</table>";
+
+  // --- Напруги комірок ---
+  html += "<h2>🔬 Напруги комірок</h2>";
+  html += "<table class='cell-table'>";
+  html += "<tr><th>Комірка</th><th>Напруга (V)</th><th>Опір (Ом)</th></tr>";
+
+  // Fallback для комірок, якщо count = 0
+  if (G_data.real_cell_count == 0) {
+    for (int j = 0; j < 16; j++) {
+      if (G_data.cellVoltage[j] > 0.1) {
+        html += "<tr><td>" + String(j + 1) + "</td><td>" + String(G_data.cellVoltage[j], 3) + "</td><td>" + String(G_data.wireResist[j], 3) + "</td></tr>";
+      }
+    }
+  } else {
+    for (int j = 0; j < G_data.real_cell_count; j++) {
+      html += "<tr><td>" + String(j + 1) + "</td><td>" + String(G_data.cellVoltage[j], 3) + "</td><td>" + String(G_data.wireResist[j], 3) + "</td></tr>";
+    }
+  }
+  html += "</table>";
+  html += "</div></body></html>";
+
+  server.sendHeader("Connection", "close");
+  server.send(200, "text/html; charset=UTF-8", html);
+}
+
+
+
+void handleInfo() {
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  html += "<title>Інформація про Пристрій BMS</title>";
+  html += "<style>";
+  // Вставте сюди той самий CSS, що й у handleRoot(), або зробіть його зовнішнім!
+  html += "body { font-family: Arial, sans-serif; background-color: #f4f4f9; color: #333; margin: 0; padding: 0; }";
+  html += ".container { max-width: 800px; margin: 20px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }";
+  html += "h1 { color: #007bff; text-align: center; }";
+  html += "h2 { border-bottom: 2px solid #ccc; padding-bottom: 5px; margin-top: 20px; color: #555; }";
+  html += "table { width: 100%; border-collapse: collapse; margin-top: 10px; }";
+  html += "th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }";
+  html += "th { background-color: #007bff; color: white; }";
+  html += "tr:nth-child(even) { background-color: #f2f2f2; }";
+  // Додано стиль для таблиці комірок, якщо вона буде горизонтальною
+  html += ".cell-table td { text-align: center; }";
+  html += ".back-button { display: inline-block; padding: 10px 15px; margin-top: 20px; background-color: #5bc0de; border-radius: 5px; text-decoration: none; color: white; font-weight: bold; text-align: center; }";
+  html += "</style></head><body><div class='container'>";
+
+  html += "<h1>ℹ️ Інформація про Пристрій BMS</h1>";
+
+  if (!isConnected) {
+    html += "<p style='text-align: center;'><span style='color: red;'>Пристрій BMS не підключено.</span></p>";
+  } else if (parseinfo) {
+    // ----------------------------------------------------------------------
+    // --- 1. Основні деталі пристрою (G_info) ---
+    // ----------------------------------------------------------------------
+    html += "<h2>⚙️ Основні деталі пристрою</h2>";
+    html += "<table>";
+    html += "<tr><th>Параметр</th><th>Значення</th></tr>";
+    html += "<tr><td>Ім'я пристрою</td><td>" + String(G_info.deviceName.c_str()) + "</td></tr>";
+    html += "<tr><td>Серійний номер</td><td>" + String(G_info.serialNumber.c_str()) + "</td></tr>";
+    html += "<tr><td>Версія HW/SW</td><td>" + String(G_info.hardwareVersion.c_str()) + " / " + String(G_info.softwareVersion.c_str()) + "</td></tr>";
+    html += "<tr><td>Vendor ID</td><td>" + String(G_info.vendorID.c_str()) + "</td></tr>";
+    html += "<tr><td>Дата виготовлення</td><td>" + String(G_info.manufacturingDate.c_str()) + "</td></tr>";
+    html += "<tr><td>Кількість увімкнень</td><td>" + String(G_info.powerOnCount) + "</td></tr>";
+    html += "<tr><td>Device Passcode</td><td>" + String(G_info.devicePasscode.c_str()) + "</td></tr>";
+    html += "<tr><td>Setup Passcode</td><td>" + String(G_info.setupPasscode.c_str()) + "</td></tr>";
+    html += "<tr><td>Passcode</td><td>" + String(G_info.passcode.c_str()) + "</td></tr>";
+    html += "<tr><td>Дані користувача</td><td>" + String(G_info.userData.c_str()) + "</td></tr>";
+    html += "</table>";
+
+    // ----------------------------------------------------------------------
+    // --- 2. Основні параметри батареї (G_data) ---
+    // ----------------------------------------------------------------------
+    html += "<h2>🔋 Основні параметри батареї</h2>";
+    html += "<table>";
+    html += "<tr><th>Параметр</th><th>Значення</th><th>Одиниці</th></tr>";
     html += "<tr><td>Напруга батареї</td><td>" + String(G_data.Battery_Voltage, 2) + "</td><td>V</td></tr>";
     html += "<tr><td>Струм заряду/розряду</td><td>" + String(G_data.Charge_Current, 2) + "</td><td>A</td></tr>";
     html += "<tr><td>Потужність</td><td>" + String(G_data.Battery_Power, 2) + "</td><td>W</td></tr>";
-    html += "<tr><td>Кількість комірок</td><td>" + String(G_data.real_cell_count) + "</td><td>Шт</td></tr>";
     html += "<tr><td>Залишок заряду (SOC)</td><td>" + String(G_data.Percent_Remain) + "</td><td>%</td></tr>";
     html += "<tr><td>Залишкова ємність</td><td>" + String(G_data.Capacity_Remain, 3) + "</td><td>Ah</td></tr>";
     html += "<tr><td>Номінальна ємність</td><td>" + String(G_data.Nominal_Capacity, 3) + "</td><td>Ah</td></tr>";
+    html += "<tr><td>Цикли/Ємність циклу</td><td>" + String(G_data.Cycle_Count) + " / " + String(G_data.Cycle_Capacity, 3) + "</td><td>Ah</td></tr>";
+    html += "<tr><td>Час роботи</td><td>" + String(G_data.days) + "d " + String(G_data.hr) + "h " + String(G_data.mi) + "m " + String(G_data.sec) + "s</td><td></td></tr>";
+    html += "</table>";
+
+    // ----------------------------------------------------------------------
+    // --- 3. Деталі комірок та температури (G_data) ---
+    // ----------------------------------------------------------------------
+    html += "<h2>🌡️ Деталі комірок та температури</h2>";
+    html += "<table>";
+    html += "<tr><th>Параметр</th><th>Значення</th><th>Одиниці</th></tr>";
+    html += "<tr><td>Кількість комірок</td><td>" + String(G_data.real_cell_count) + "</td><td>Шт</td></tr>";
     html += "<tr><td>Середня напруга комірки</td><td>" + String(G_data.Average_Cell_Voltage, 3) + "</td><td>V</td></tr>";
     html += "<tr><td>Дельта напруг комірок</td><td>" + String(G_data.Delta_Cell_Voltage, 3) + "</td><td>V</td></tr>";
     html += "<tr><td>Температура MOS</td><td>" + String(G_data.MOS_Temp, 1) + "</td><td>°C</td></tr>";
     html += "<tr><td>Температура T1</td><td>" + String(G_data.Battery_T1, 1) + "</td><td>°C</td></tr>";
     html += "<tr><td>Температура T2</td><td>" + String(G_data.Battery_T2, 1) + "</td><td>°C</td></tr>";
-    html += "<tr><td>Час роботи</td><td>" + String(G_data.days) + "d " + String(G_data.hr) + "h " + String(G_data.mi) + "m " + String(G_data.sec) + "s</td><td></td></tr>";
-    html += "<tr><td>Цикли/Ємність циклу</td><td>" + String(G_data.Cycle_Count) + " / " + String(G_data.Cycle_Capacity, 3) + " Ah</td><td></td></tr>";
-    // --- КЕРУВАННЯ ЗАРЯДОМ ---
-    html += "<tr><td>Дозволено заряд</td><td>" + String(G_data.Charge ? "🟢 УВІМК" : "🔴 ВИМК") + "</td><td>";
-    if (G_data.Charge) {
-      html += "<a href='/charge_off' class='control-button toggle-off off'>ВИМКНУТИ ЗАРЯД</a>";
-    } else {
-      html += "<a href='/charge_on' class='control-button toggle-on'>УВІМКНУТИ ЗАРЯД</a>";
-    }
-    html += "</td></tr>";
-    // --- КЕРУВАННЯ РОЗРЯДОМ ---
-    html += "<tr><td>Дозволено розряд</td><td>" + String(G_data.Discharge ? "🟢 УВІМК" : "🔴 ВИМК") + "</td><td>";
-    if (G_data.Discharge) {
-      html += "<a href='/discharge_off' class='control-button toggle-off off'>ВИМКНУТИ РОЗРЯД</a>";
-    } else {
-      html += "<a href='/discharge_on' class='control-button toggle-on discharge'>УВІМКНУТИ РОЗРЯД</a>";
-    }
-    html += "</td></tr>";
-    // --- КЕРУВАННЯ БАЛАНСУВАННЯМ ---
-    html += "<tr><td>Балансування</td><td>" + String(G_data.Balance ? "🟢 Активне" : "⚪ Неактивне") + "</td><td>";
-    if (G_data.Balance) {
-      html += "<a href='/balance_off' class='control-button toggle-off off'>ВИМКНУТИ БАЛАНС</a>";
-    } else {
-      html += "<a href='/balance_on' class='control-button toggle-on'>УВІМКНУТИ БАЛАНС</a>";
-    }
-    html += "</td></tr>";
-    html += "<tr><td>Струм балансування</td><td>" + String(G_data.Balance_Curr, 3) + " A</td><td></td></tr>";
     html += "</table>";
 
     // --- Напруги комірок ---
@@ -620,31 +705,18 @@ void handleRoot() {
       }
     }
     html += "</table>";
+
+  } else {
+    html += "<p style='text-align: center;'><span style='color: orange;'>Дані про пристрій не були отримані.</span></p>";
   }
 
- if (parseinfo) {
-    // --- Інфо про пристрій ---
-    html += "<h2>⚙️ Інформація про Пристрій BMS</h2>";
-    html += "<table>";
-    html += "<tr><th>Параметр</th><th>Значення</th></tr>";
-    html += "<tr><td>Назва пристрою</td><td>" + String(G_info.deviceName.c_str()) + "</td></tr>";
-    html += "<tr><td>Серійний номер</td><td>" + String(G_info.serialNumber.c_str()) + "</td></tr>";
-    html += "<tr><td>Версія HW/SW</td><td>" + String(G_info.hardwareVersion.c_str()) + " / " + String(G_info.softwareVersion.c_str()) + "</td></tr>";
-    html += "<tr><td>ID Постачальника</td><td>" + String(G_info.vendorID.c_str()) + "</td></tr>";
-    html += "<tr><td>Дата виготовлення</td><td>" + String(G_info.manufacturingDate.c_str()) + "</td></tr>";
-    html += "<tr><td>Кількість увімкнень</td><td>" + String(G_info.powerOnCount) + "</td></tr>";
-    html += "<tr><td>Код доступу</td><td>" + String(G_info.passcode.c_str()) + "</td></tr>";
-    html += "<tr><td>Дані користувача</td><td>" + String(G_info.userData.c_str()) + "</td></tr>";
-    
-    html += "</table>";
-}
+  // --- Кнопка повернення ---
+  html += "<p style='text-align: center;'><a href='/' class='back-button'>◀️ НА ГОЛОВНУ</a></p>";
 
   html += "</div></body></html>";
   server.sendHeader("Connection", "close");
   server.send(200, "text/html; charset=UTF-8", html);
 }
-
-// Припускаємо, що всі змінні (G_settings, isConnected, server, parseSettings) доступні глобально або через параметри
 
 void handleSettings() {
   // Перевірка, чи підключено до BMS
@@ -1158,6 +1230,7 @@ void init_wifi() {
 // Функція задачі для Веб-сервера, запущена в окремому ядрі
 void webServerTask(void* parameter) {
   server.on("/", handleRoot);
+  server.on("/info", handleInfo);  // ДОДАТИ ЦЕЙ РЯДОК
   server.on("/settings", handleSettings);
   server.on("/charge_on", handleChargeOn);
   server.on("/charge_off", handleChargeOff);
